@@ -1,0 +1,33 @@
+[Unit]
+Description=Financer — Telegram bot for finance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=financer
+Group=financer
+WorkingDirectory=/opt/financer
+Environment=DATA_FILE=/opt/financer/data/financer.db
+ExecStart=/opt/financer/financer
+Restart=always
+RestartSec=5
+UMask=0077
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+ReadWritePaths=/opt/financer/data
+
+[Install]
+WantedBy=multi-user.target

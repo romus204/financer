@@ -1,0 +1,13 @@
+services:
+  financer:
+    build: .
+    image: financer:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_FILE: /data/financer.db
+    volumes:
+      - financer-data:/data
+
+volumes:
+  financer-data:
