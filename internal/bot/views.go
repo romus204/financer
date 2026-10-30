@@ -20,6 +20,7 @@ import (
 type accView struct {
 	storage.Account
 	Balance int64
+	Paid    int64 // credit cards: money put on the card since the statement
 }
 
 func (b *Bot) showBalance(r *req) {
@@ -28,7 +29,11 @@ func (b *Bot) showBalance(r *req) {
 	b.store.View(r.uid, func(u *storage.User) {
 		bal := u.Balances()
 		for _, a := range u.ActiveAccounts() {
-			accs = append(accs, accView{Account: *a, Balance: bal[a.ID]})
+			v := accView{Account: *a, Balance: bal[a.ID]}
+			if a.MinPayment > 0 {
+				v.Paid = u.PaidSince(a.ID, a.StatementAt)
+			}
+			accs = append(accs, v)
 		}
 		base = u.BaseCurrency
 	})
@@ -163,31 +168,50 @@ func (b *Bot) sumIn(ctx context.Context, totals map[string]int64, curs []string,
 	return sum, missing, converted
 }
 
-// upcomingPayments lists the next payments on credit cards and loans that have a debt.
+// upcomingPayments lists the next payments on credit cards and loans that have a debt:
+// the monthly loan payment, the credit card minimum payment and the grace period end.
 func upcomingPayments(accs []accView, now time.Time) string {
 	type payment struct {
-		date time.Time
+		day  string // YYYY-MM-DD, for sorting
 		line string
 	}
+	today := civilDate(now)
 	var list []payment
+	add := func(date time.Time, a accView, what string) {
+		prefix := ""
+		if civilDate(date).Before(today) {
+			prefix = "⚠️ "
+		}
+		list = append(list, payment{date.Format("2006-01-02"), prefix + paymentDate(date, now) + " — " + esc(a.Name) + what})
+	}
 	for _, a := range accs {
-		if !a.Kind.IsDebt() || a.Balance >= 0 {
+		if a.Balance >= 0 {
 			continue
 		}
-		date, ok := a.NextPayment(now)
-		if !ok {
-			continue
+		switch a.Kind {
+		case storage.KindLoan:
+			date, ok := a.NextPayment(now)
+			if !ok {
+				continue
+			}
+			what := ""
+			if a.PaymentAmount > 0 {
+				what = " · <b>" + money.Format(min(a.PaymentAmount, -a.Balance), a.Currency) + "</b>"
+			}
+			add(date, a, what)
+		case storage.KindCredit:
+			if left := minPaymentLeft(&a.Account, a.Balance, a.Paid); a.MinPayment > 0 && left > 0 && !a.MinPaymentDue.IsZero() {
+				add(a.MinPaymentDue, a, " · мин. платёж <b>"+money.Format(left, a.Currency)+"</b>")
+			}
+			if !a.RepayBy.IsZero() {
+				add(a.RepayBy, a, " · весь долг <b>"+money.Format(-a.Balance, a.Currency)+"</b>")
+			}
 		}
-		line := paymentDate(date, now) + " — " + esc(a.Name)
-		if a.PaymentAmount > 0 {
-			line += " · <b>" + money.Format(min(a.PaymentAmount, -a.Balance), a.Currency) + "</b>"
-		}
-		list = append(list, payment{date, line})
 	}
 	if len(list) == 0 {
 		return ""
 	}
-	slices.SortStableFunc(list, func(a, b payment) int { return a.date.Compare(b.date) })
+	slices.SortStableFunc(list, func(a, b payment) int { return cmp.Compare(a.day, b.day) })
 	var sb strings.Builder
 	sb.WriteString("\n📅 <b>Ближайшие платежи</b>\n")
 	for _, p := range list {

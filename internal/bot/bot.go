@@ -48,8 +48,11 @@ const (
 	stepAccBalance        // opening balance of a new account
 	stepAccDebt           // current debt of a new credit card or loan
 	stepAccAvailable      // available amount of a new credit card
-	stepAccPayAmount      // monthly payment of a credit card or loan
+	stepAccPayAmount      // monthly payment of a loan
 	stepAccPayDay         // day of month of the payment
+	stepAccMinPay         // minimum payment from a credit card statement
+	stepAccMinPayDue      // due date of the minimum payment
+	stepAccRepayBy        // date by which the whole credit card debt must be repaid
 	stepAccRename
 	stepAccAdjust
 	stepAccLimit // available amount of an existing credit card
@@ -229,7 +232,8 @@ func (b *Bot) onMessage(ctx context.Context, m *tg.Message) {
 	case stepNote:
 		b.inputNote(r, s, text)
 	case stepAccCurrency, stepAccName, stepAccBalance, stepAccDebt, stepAccAvailable,
-		stepAccPayAmount, stepAccPayDay, stepAccRename, stepAccAdjust, stepAccLimit:
+		stepAccPayAmount, stepAccPayDay, stepAccMinPay, stepAccMinPayDue, stepAccRepayBy,
+		stepAccRename, stepAccAdjust, stepAccLimit:
 		b.inputAccount(r, s, text)
 	case stepCatAdd:
 		b.inputCategory(r, s, text)
@@ -331,7 +335,7 @@ func (b *Bot) cmdHelp(r *req) {
 
 <b>🏦 Счета</b> — добавить, переименовать, выбрать основной (⭐), удалить. <b>🎯 Изменить баланс</b> — если остаток в боте разошёлся с реальным, введи фактическую сумму, разница запишется корректировкой.
 
-<b>💸 Кредитки и 🧾 кредиты</b> — тоже счета: укажи долг, доступную сумму (для кредитки), сумму и день ежемесячного платежа (по желанию). Покупка по кредитке — обычный расход с неё, погашение — 🔁 перевод на неё с карты. Ближайшие платежи видны в 💼 Балансе.
+<b>💸 Кредитки и 🧾 кредиты</b> — тоже счета: укажи долг и доступную сумму. Для кредитки — дату, до которой нужно погасить весь долг без процентов, и минимальный платёж из выписки (вноси его, когда придёт новая выписка). Для кредита — сумму и день ежемесячного платежа. Покупка по кредитке — обычный расход с неё, погашение — 🔁 перевод на неё с карты: бот сам посчитает, сколько из минимального платежа уже внесено. Ближайшие платежи видны в 💼 Балансе.
 
 <b>💼 Баланс</b> — остатки по каждому счёту, итоги по валютам и общий итог в основной валюте.
 <b>📜 История</b> — последние операции, любую можно открыть и удалить.

@@ -20,6 +20,9 @@ type accountDraft struct {
 	limit     int64
 	payAmount int64
 	payDay    int
+	minPay    int64
+	minPayDue time.Time
+	repayBy   time.Time
 }
 
 const (
@@ -75,8 +78,12 @@ func renderAccount(u *storage.User, a *storage.Account, now time.Time) screen {
 	fmt.Fprintf(&sb, "%s <b>%s</b>\n%s · %s\n\n", kindIcon(a.Kind), esc(a.Name), kindName(a.Kind), currencyLabel(a.Currency))
 	if a.Kind.IsDebt() {
 		sb.WriteString(debtLines(a, bal))
-		if p := paymentLine(a, now); p != "" {
-			sb.WriteString("\n" + p)
+		extra := paymentLine(a, now)
+		if a.Kind == storage.KindCredit {
+			extra = statementLines(a, bal, u.PaidSince(a.ID, a.StatementAt), now)
+		}
+		if extra != "" {
+			sb.WriteString("\n" + extra)
 		}
 	} else {
 		fmt.Fprintf(&sb, "Баланс: <b>%s</b>", money.Format(bal, a.Currency))
@@ -88,11 +95,12 @@ func renderAccount(u *storage.User, a *storage.Account, now time.Time) screen {
 	k := kb(row(btn("🎯 Изменить баланс", "a:adj:"+id), btn("✏️ Переименовать", "a:rn:"+id)))
 	if a.Kind.IsDebt() {
 		k = kb(row(btn("🎯 Изменить долг", "a:adj:"+id), btn("✏️ Переименовать", "a:rn:"+id)))
-		debtRow := row(btn("📅 Платёж", "a:pay:"+id))
 		if a.Kind == storage.KindCredit {
-			debtRow = append(debtRow, btn("💳 Доступно", "a:lim:"+id))
+			k.Add(btn("🧾 Мин. платёж", "a:mp:"+id), btn("⏳ Погасить до", "a:rb:"+id))
+			k.Add(btn("💳 Доступно", "a:lim:"+id))
+		} else {
+			k.Add(btn("📅 Платёж", "a:pay:"+id))
 		}
-		k.Add(debtRow...)
 	}
 	k.Add(btn("📜 История", "h:0:"+id))
 	if !isDefault {
@@ -197,7 +205,70 @@ func (b *Bot) cbAccount(r *req, s *session, p []string) {
 			return
 		}
 		s.acc.limit = 0
-		b.askPayAmount(r, s)
+		b.afterAvailable(r, s)
+
+	case "mps":
+		if s.acc == nil || s.accID != 0 || s.step != stepAccMinPay {
+			b.stale(r)
+			return
+		}
+		s.acc.minPay, s.acc.minPayDue = 0, time.Time{}
+		b.askRepayBy(r, s)
+
+	case "rbs":
+		if s.acc == nil || s.accID != 0 || s.step != stepAccRepayBy {
+			b.stale(r)
+			return
+		}
+		s.acc.repayBy = time.Time{}
+		b.createAccount(r, s, -s.acc.debt)
+
+	case "mp", "rb":
+		var acc storage.Account
+		b.store.View(r.uid, func(u *storage.User) {
+			if a := u.ActiveAccount(id); a != nil {
+				acc = *a
+			}
+		})
+		if acc.ID == 0 {
+			b.fail(r, errAccountGone)
+			return
+		}
+		if acc.Kind != storage.KindCredit {
+			b.stale(r)
+			return
+		}
+		s.reset()
+		s.accID = id
+		s.acc = &accountDraft{kind: acc.Kind, currency: acc.Currency, name: acc.Name}
+		if arg(p, 0) == "mp" {
+			b.askMinPay(r, s, acc.MinPayment > 0)
+		} else {
+			b.askRepayBy(r, s)
+		}
+
+	case "mpc", "rbc":
+		if s.accID == id {
+			s.reset()
+		}
+		err := b.store.Update(r.uid, func(u *storage.User) error {
+			a := u.ActiveAccount(id)
+			if a == nil || a.Kind != storage.KindCredit {
+				return errAccountGone
+			}
+			if arg(p, 0) == "mpc" {
+				a.MinPayment, a.MinPaymentDue, a.StatementAt = 0, time.Time{}, time.Time{}
+			} else {
+				a.RepayBy = time.Time{}
+			}
+			return nil
+		})
+		if err != nil {
+			b.fail(r, err)
+			return
+		}
+		r.toast = "Удалено"
+		b.showAccount(r, id, "")
 
 	case "ps":
 		if s.acc == nil || s.step != stepAccPayAmount {
@@ -226,8 +297,12 @@ func (b *Bot) cbAccount(r *req, s *session, p []string) {
 				acc = *a
 			}
 		})
-		if acc.ID == 0 || !acc.Kind.IsDebt() {
+		if acc.ID == 0 {
 			b.fail(r, errAccountGone)
+			return
+		}
+		if acc.Kind != storage.KindLoan {
+			b.stale(r)
 			return
 		}
 		s.reset()
@@ -237,7 +312,9 @@ func (b *Bot) cbAccount(r *req, s *session, p []string) {
 		b.askPayAmount(r, s)
 
 	case "pc":
-		s.reset()
+		if s.accID == id {
+			s.reset()
+		}
 		err := b.store.Update(r.uid, func(u *storage.User) error {
 			a := u.ActiveAccount(id)
 			if a == nil || !a.Kind.IsDebt() {
@@ -387,6 +464,69 @@ func (b *Bot) afterDebt(r *req, s *session) {
 		kb(row(btn("Пропустить", "a:ls"), btn("❌ Отмена", "a:l"))))
 }
 
+// afterAvailable asks about the statement of a new credit card, if it has a debt.
+func (b *Bot) afterAvailable(r *req, s *session) {
+	if s.acc.debt <= 0 {
+		b.createAccount(r, s, 0)
+		return
+	}
+	b.askMinPay(r, s, false)
+}
+
+// askMinPay asks for the minimum payment from a credit card statement. canClear adds
+// a button that removes the current one.
+func (b *Bot) askMinPay(r *req, s *session, canClear bool) {
+	s.step = stepAccMinPay
+	k := kb()
+	if s.accID == 0 {
+		k.Add(btn("Пропустить", "a:mps"), accDraftBack(s))
+	} else {
+		k.Add(accDraftBack(s))
+		if canClear {
+			k.Add(btn("🗑 Убрать мин. платёж", "a:mpc:"+strconv.FormatInt(s.accID, 10)))
+		}
+	}
+	b.show(r, fmt.Sprintf("🧾 Какой минимальный платёж по выписке «%s»? Введите сумму в %s.\n<i>Когда придёт следующая выписка, обновите его здесь же. Переводы на карту после этого засчитаются в платёж.</i>",
+		esc(s.acc.name), currencyLabel(s.acc.currency)), k)
+}
+
+func (b *Bot) askMinPayDue(r *req, s *session) {
+	s.step = stepAccMinPayDue
+	b.show(r, "🧾 До какого числа нужно внести минимальный платёж? Например <code>15</code> или <code>15.11</code>.",
+		kb(row(accDraftBack(s))))
+}
+
+func (b *Bot) askRepayBy(r *req, s *session) {
+	s.step = stepAccRepayBy
+	k := kb()
+	if s.accID == 0 {
+		k.Add(btn("Пропустить", "a:rbs"), accDraftBack(s))
+	} else {
+		k.Add(accDraftBack(s), btn("🗑 Убрать дату", "a:rbc:"+strconv.FormatInt(s.accID, 10)))
+	}
+	b.show(r, fmt.Sprintf("⏳ До какой даты нужно погасить весь долг по «%s», чтобы не платить проценты? Например <code>25.11</code>.",
+		esc(s.acc.name)), k)
+}
+
+// saveCredit applies a change to the credit card being edited and shows it.
+func (b *Bot) saveCredit(r *req, s *session, msg string, change func(a *storage.Account)) {
+	id := s.accID
+	err := b.store.Update(r.uid, func(u *storage.User) error {
+		a := u.ActiveAccount(id)
+		if a == nil || a.Kind != storage.KindCredit {
+			return errAccountGone
+		}
+		change(a)
+		return nil
+	})
+	s.reset()
+	if err != nil {
+		b.fail(r, err)
+		return
+	}
+	b.showAccount(r, id, msg)
+}
+
 // accDraftBack returns to the account being edited or cancels the new account.
 func accDraftBack(s *session) tg.InlineButton {
 	if s.accID != 0 {
@@ -401,7 +541,7 @@ func (b *Bot) askPayAmount(r *req, s *session) {
 	if s.accID != 0 {
 		k.Add(btn("🗑 Убрать платёж", "a:pc:"+strconv.FormatInt(s.accID, 10)))
 	}
-	b.show(r, fmt.Sprintf("📅 Сколько нужно платить каждый месяц по «%s»? Введите сумму в %s.\n<i>Для кредитки — минимальный платёж. Можно пропустить.</i>",
+	b.show(r, fmt.Sprintf("📅 Сколько нужно платить каждый месяц по «%s»? Введите сумму в %s.\n<i>Можно пропустить.</i>",
 		esc(s.acc.name), currencyLabel(s.acc.currency)), k)
 }
 
@@ -445,6 +585,56 @@ func parsePayDay(text string) (int, bool) {
 	return d, err == nil && d >= 1 && d <= 31
 }
 
+// parseDate accepts «25», «25.11», «25.11.2026», «25.11.26» or «2026-11-25» and returns
+// a date at midnight UTC. Without a month or year the nearest date not before today is
+// taken; a full date may also be in the past year, e.g. an overdue statement.
+func parseDate(text string, today time.Time) (time.Time, bool) {
+	parts := strings.FieldsFunc(strings.TrimSpace(text), func(r rune) bool { return r == '.' || r == '/' || r == '-' })
+	if len(parts) == 0 || len(parts) > 3 {
+		return time.Time{}, false
+	}
+	nums := make([]int, len(parts))
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return time.Time{}, false
+		}
+		nums[i] = n
+	}
+	d := nums[0]
+	if len(nums) == 1 {
+		if d < 1 || d > 31 {
+			return time.Time{}, false
+		}
+		return (&storage.Account{PaymentDay: d}).NextPayment(today)
+	}
+	y, m := today.Year(), time.Month(nums[1])
+	if len(nums) == 3 {
+		y = nums[2]
+		if len(parts[0]) == 4 { // ISO: year-month-day
+			y, m, d = nums[0], time.Month(nums[1]), nums[2]
+		}
+		if y < 100 {
+			y += 2000
+		}
+	}
+	valid := func(y int) (time.Time, bool) {
+		t := time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+		return t, t.Day() == d && t.Month() == m
+	}
+	if len(nums) == 3 {
+		t, ok := valid(y)
+		return t, ok && !t.Before(today.AddDate(-1, 0, 0)) && y <= today.Year()+100
+	}
+	// Without a year: the nearest such date, e.g. 29.02 may be up to four years ahead.
+	for i := range 5 {
+		if t, ok := valid(y + i); ok && !t.Before(today) {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
 func (b *Bot) createAccount(r *req, s *session, balance int64) {
 	ad := s.acc
 	var id int64
@@ -452,8 +642,13 @@ func (b *Bot) createAccount(r *req, s *session, balance int64) {
 	err := b.store.Update(r.uid, func(u *storage.User) error {
 		first = len(u.ActiveAccounts()) == 0
 		now := time.Now()
+		dayStart := civilDate(now.In(b.cfg.Location))
 		a := u.AddAccount(ad.name, ad.kind, ad.currency, now)
 		a.CreditLimit, a.PaymentAmount, a.PaymentDay = ad.limit, ad.payAmount, ad.payDay
+		a.RepayBy, a.MinPayment, a.MinPaymentDue = ad.repayBy, ad.minPay, ad.minPayDue
+		if ad.minPay > 0 {
+			a.StatementAt = time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), 0, 0, 0, 0, b.cfg.Location)
+		}
 		if balance != 0 {
 			u.AddTransaction(storage.Transaction{Type: storage.TxAdjust, AccountID: a.ID, Amount: balance, Note: "Начальный остаток"}, now)
 		}
@@ -474,7 +669,8 @@ func (b *Bot) createAccount(r *req, s *session, balance int64) {
 func (b *Bot) inputAccount(r *req, s *session, text string) {
 	cancel := kb(row(btn("❌ Отмена", "a:l")))
 	switch s.step {
-	case stepAccCurrency, stepAccName, stepAccBalance, stepAccDebt, stepAccAvailable, stepAccPayAmount, stepAccPayDay:
+	case stepAccCurrency, stepAccName, stepAccBalance, stepAccDebt, stepAccAvailable, stepAccPayAmount, stepAccPayDay,
+		stepAccMinPay, stepAccMinPayDue, stepAccRepayBy:
 		if s.acc == nil {
 			s.reset()
 			return
@@ -533,7 +729,7 @@ func (b *Bot) inputAccount(r *req, s *session, text string) {
 			return
 		}
 		s.acc.limit = v + s.acc.debt
-		b.askPayAmount(r, s)
+		b.afterAvailable(r, s)
 
 	case stepAccPayAmount:
 		v, err := money.Parse(text)
@@ -552,6 +748,40 @@ func (b *Bot) inputAccount(r *req, s *session, text string) {
 		}
 		s.acc.payDay = d
 		b.finishPayment(r, s)
+
+	case stepAccMinPay:
+		v, err := money.Parse(text)
+		if err != nil || v <= 0 {
+			b.send(r, "Не понял сумму. Пример: <code>3000</code>", kb(row(accDraftBack(s))))
+			return
+		}
+		s.acc.minPay = v
+		b.askMinPayDue(r, s)
+
+	case stepAccMinPayDue, stepAccRepayBy:
+		now := time.Now().In(b.cfg.Location)
+		d, ok := parseDate(text, civilDate(now))
+		if !ok {
+			b.send(r, "Не понял дату. Пример: <code>15</code>, <code>15.11</code> или <code>15.11.2026</code>", kb(row(accDraftBack(s))))
+			return
+		}
+		ad := s.acc
+		switch {
+		case s.step == stepAccMinPayDue && s.accID == 0:
+			ad.minPayDue = d
+			b.askRepayBy(r, s)
+		case s.step == stepAccMinPayDue:
+			b.saveCredit(r, s, "✅ Минимальный платёж сохранён.\n\n", func(a *storage.Account) {
+				// Top-ups made earlier today, before the statement was entered, count too.
+				a.MinPayment, a.MinPaymentDue = ad.minPay, d
+				a.StatementAt = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+			})
+		case s.accID == 0:
+			ad.repayBy = d
+			b.createAccount(r, s, -ad.debt)
+		default:
+			b.saveCredit(r, s, "✅ Дата погашения сохранена.\n\n", func(a *storage.Account) { a.RepayBy = d })
+		}
 
 	case stepAccLimit:
 		v, err := money.Parse(text)

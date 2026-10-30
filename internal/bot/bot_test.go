@@ -1263,40 +1263,41 @@ func TestAddCreditCard(t *testing.T) {
 	h.type_("15 000")
 	contains(t, h.tg.last(t).text(), "доступно")
 	h.type_("85000")
-	contains(t, h.tg.last(t).text(), "каждый месяц")
+	contains(t, h.tg.last(t).text(), "минимальный платёж по выписке")
 	h.type_("3000")
-	contains(t, h.tg.last(t).text(), "Какого числа")
-	h.type_("32")
-	contains(t, h.tg.last(t).text(), "от 1 до 31")
-	h.type_("25.11")
+	contains(t, h.tg.last(t).text(), "До какого числа")
+	h.type_("31.02.2099")
+	contains(t, h.tg.last(t).text(), "Не понял дату")
+	h.type_("01.01.2000") // too far in the past
+	contains(t, h.tg.last(t).text(), "Не понял дату")
+	h.type_("15.11.2099")
+	contains(t, h.tg.last(t).text(), "погасить весь долг")
+	h.type_("25.11.2099")
 
 	h.user(func(u *storage.User) {
 		if len(u.Accounts) != 1 {
 			t.Fatalf("accounts = %+v", u.Accounts)
 		}
 		a := u.Accounts[0]
-		if a.Kind != storage.KindCredit || a.CreditLimit != 10000000 || a.PaymentAmount != 300000 || a.PaymentDay != 25 {
+		if a.Kind != storage.KindCredit || a.CreditLimit != 10000000 || a.MinPayment != 300000 || a.StatementAt.IsZero() ||
+			a.MinPaymentDue.Format("2006-01-02") != "2099-11-15" || a.RepayBy.Format("2006-01-02") != "2099-11-25" {
 			t.Errorf("account = %+v", a)
+		}
+		if a.PaymentAmount != 0 || a.PaymentDay != 0 {
+			t.Errorf("monthly payment must not be set on a credit card: %+v", a)
 		}
 		if u.Balance(a.ID) != -1500000 {
 			t.Errorf("balance = %d", u.Balance(a.ID))
 		}
 	})
-	edits := h.tg.byMethod("editMessageText")
-	sends := h.tg.byMethod("sendMessage")
-	text := edits[len(edits)-1].text() + sends[0].text()
-	if !strings.Contains(text, "Счёт добавлен") && !strings.Contains(h.tg.last(t).text(), "Готово") {
-		t.Errorf("no confirmation: %q", text)
-	}
 	h.press(1, "bal")
 	got := h.tg.last(t).text()
 	contains(t, got, "Кредитные карты")
 	contains(t, got, "долг <b>"+money.Format(1500000, "RUB"))
 	contains(t, got, "доступно "+money.Format(8500000, "RUB"))
-	contains(t, got, "Ближайшие платежи")
-	contains(t, got, money.Format(300000, "RUB"))
+	contains(t, got, "15 ноября 2099 — Платинум · мин. платёж <b>"+money.Format(300000, "RUB"))
+	contains(t, got, "25 ноября 2099 — Платинум · весь долг <b>"+money.Format(1500000, "RUB"))
 }
-
 func TestAddLoanSkippingPayment(t *testing.T) {
 	h := newHarness(t, "")
 	h.press(1, "a:new")
@@ -1352,21 +1353,10 @@ func TestEditCreditPaymentLimitAndDebt(t *testing.T) {
 	sa := strconv.FormatInt(a, 10)
 
 	h.press(1, "a:v:"+sa)
-	if last := h.tg.last(t); !last.hasButton("a:pay:"+sa) || !last.hasButton("a:lim:"+sa) {
+	if last := h.tg.last(t); !last.hasButton("a:mp:"+sa) || !last.hasButton("a:rb:"+sa) || !last.hasButton("a:lim:"+sa) || last.hasButton("a:pay:"+sa) {
 		t.Errorf("buttons = %v", last.buttons())
 	}
 	contains(t, h.tg.last(t).text(), "Долг: <b>"+money.Format(1000000, "RUB"))
-
-	h.press(1, "a:pay:"+sa)
-	h.type_("2500")
-	h.type_("10")
-	h.user(func(u *storage.User) {
-		if acc := u.Account(a); acc.PaymentAmount != 250000 || acc.PaymentDay != 10 {
-			t.Errorf("payment = %d / %d", acc.PaymentAmount, acc.PaymentDay)
-		}
-	})
-	contains(t, h.tg.last(t).text(), "Платёж сохранён")
-	contains(t, h.tg.last(t).text(), "10-го числа")
 
 	h.press(1, "a:lim:"+sa)
 	h.type_("40000") // available 40 000 with debt 10 000 => limit 50 000
@@ -1384,6 +1374,31 @@ func TestEditCreditPaymentLimitAndDebt(t *testing.T) {
 	}
 	contains(t, h.tg.last(t).text(), "Доступно: <b>"+money.Format(3800000, "RUB"))
 
+	// the monthly payment belongs to loans only
+	h.press(1, "a:pay:"+sa)
+	if h.sessionStep() != stepIdle {
+		t.Error("monthly payment edit started on a credit card")
+	}
+}
+
+func TestEditLoanPayment(t *testing.T) {
+	h := newHarness(t, "")
+	a := h.addAccount("Кредит", storage.KindLoan, "RUB", -1000000)
+	sa := strconv.FormatInt(a, 10)
+	h.press(1, "a:v:"+sa)
+	if last := h.tg.last(t); !last.hasButton("a:pay:"+sa) || last.hasButton("a:mp:"+sa) || last.hasButton("a:lim:"+sa) {
+		t.Errorf("buttons = %v", last.buttons())
+	}
+	h.press(1, "a:pay:"+sa)
+	h.type_("2500")
+	h.type_("10")
+	h.user(func(u *storage.User) {
+		if acc := u.Account(a); acc.PaymentAmount != 250000 || acc.PaymentDay != 10 {
+			t.Errorf("payment = %d / %d", acc.PaymentAmount, acc.PaymentDay)
+		}
+	})
+	contains(t, h.tg.last(t).text(), "Платёж сохранён")
+	contains(t, h.tg.last(t).text(), "10-го числа")
 	h.press(1, "a:pc:"+sa)
 	h.user(func(u *storage.User) {
 		if acc := u.Account(a); acc.PaymentAmount != 0 || acc.PaymentDay != 0 {
@@ -1392,6 +1407,107 @@ func TestEditCreditPaymentLimitAndDebt(t *testing.T) {
 	})
 }
 
+func TestCreditStatementMinPaymentProgress(t *testing.T) {
+	h := newHarness(t, "")
+	card := h.addAccount("Дебетовая", storage.KindBank, "RUB", 5000000)
+	credit := h.addAccount("Кредитка", storage.KindCredit, "RUB", -2000000)
+	sc := strconv.FormatInt(credit, 10)
+
+	h.press(1, "a:mp:"+sc)
+	h.type_("3000")
+	h.type_("15.11.2099")
+	contains(t, h.tg.last(t).text(), "Минимальный платёж сохранён")
+	contains(t, h.tg.last(t).text(), "Мин. платёж: <b>"+money.Format(300000, "RUB")+"</b> до 15 ноября 2099")
+
+	startTransfer(h, card, credit)
+	h.type_("1000")
+	h.press(1, "a:v:"+sc)
+	contains(t, h.tg.last(t).text(), "осталось "+money.Format(200000, "RUB"))
+	h.press(1, "bal")
+	contains(t, h.tg.last(t).text(), "мин. платёж <b>"+money.Format(200000, "RUB"))
+
+	startTransfer(h, card, credit)
+	h.type_("2500")
+	h.press(1, "a:v:"+sc)
+	contains(t, h.tg.last(t).text(), "✅ внесён")
+	h.press(1, "bal")
+	if strings.Contains(h.tg.last(t).text(), "мин. платёж") {
+		t.Error("a paid minimum payment must leave the upcoming list")
+	}
+
+	h.press(1, "a:rb:"+sc)
+	h.type_("25.11.2099")
+	contains(t, h.tg.last(t).text(), "Погасить весь долг до 25 ноября 2099")
+
+	h.press(1, "a:mpc:"+sc)
+	h.press(1, "a:rbc:"+sc)
+	h.user(func(u *storage.User) {
+		a := u.Account(credit)
+		if a.MinPayment != 0 || !a.MinPaymentDue.IsZero() || !a.StatementAt.IsZero() || !a.RepayBy.IsZero() {
+			t.Errorf("statement not cleared: %+v", a)
+		}
+	})
+}
+
+func TestCreditStatementOverdue(t *testing.T) {
+	h := newHarness(t, "")
+	credit := h.addAccount("Кредитка", storage.KindCredit, "RUB", -2000000)
+	past := civilDate(time.Now()).AddDate(0, 0, -3)
+	_ = h.b.store.Update(testUser, func(u *storage.User) error {
+		a := u.Account(credit)
+		a.MinPayment, a.MinPaymentDue, a.StatementAt, a.RepayBy = 300000, past, time.Now(), past
+		return nil
+	})
+	h.press(1, "a:v:"+strconv.FormatInt(credit, 10))
+	contains(t, h.tg.last(t).text(), "⚠️ просрочен")
+	contains(t, h.tg.last(t).text(), "Льготный период закончился")
+	h.press(1, "bal")
+	contains(t, h.tg.last(t).text(), "⚠️ ")
+}
+
+func TestCreditWithoutDebtSkipsStatement(t *testing.T) {
+	h := newHarness(t, "")
+	h.press(1, "a:new")
+	h.press(1, "a:k:credit")
+	h.press(1, "a:c:RUB")
+	h.type_("Новая")
+	h.press(1, "a:d0")
+	h.type_("100000")
+	h.user(func(u *storage.User) {
+		if len(u.Accounts) != 1 || u.Accounts[0].CreditLimit != 10000000 {
+			t.Fatalf("accounts = %+v", u.Accounts)
+		}
+	})
+}
+
+func TestParseDate(t *testing.T) {
+	today := time.Date(2026, 10, 30, 0, 0, 0, 0, time.UTC)
+	d := func(y int, m time.Month, day int) time.Time { return time.Date(y, m, day, 0, 0, 0, 0, time.UTC) }
+	ok := map[string]time.Time{
+		"30":         d(2026, 10, 30),
+		"5":          d(2026, 11, 5),
+		"31":         d(2026, 10, 31),
+		"15.11":      d(2026, 11, 15),
+		"15.01":      d(2027, 1, 15), // next year
+		"29.02":      d(2028, 2, 29), // 2027 has no Feb 29
+		"15.11.2026": d(2026, 11, 15),
+		"15.11.27":   d(2027, 11, 15),
+		"15/11":      d(2026, 11, 15),
+		"2026-11-25": d(2026, 11, 25),
+		"29.10.2026": d(2026, 10, 29), // an overdue statement
+		"1.1.2026":   d(2026, 1, 1),
+	}
+	for in, want := range ok {
+		if got, ok := parseDate(in, today); !ok || !got.Equal(want) {
+			t.Errorf("parseDate(%q) = %v %v, want %v", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"", "0", "32", "abc", "31.11", "1.13", "1.1.2020", "1.1.2200", "2026-13-01", "1.2.3.4"} {
+		if _, ok := parseDate(in, today); ok {
+			t.Errorf("parseDate(%q) must fail", in)
+		}
+	}
+}
 func TestPayingOffCreditCardByTransfer(t *testing.T) {
 	h := newHarness(t, "")
 	card := h.addAccount("Дебетовая", storage.KindBank, "RUB", 5000000)

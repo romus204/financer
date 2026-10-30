@@ -69,6 +69,20 @@ ALTER TABLE accounts ADD COLUMN credit_limit   INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE accounts ADD COLUMN payment_amount INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE accounts ADD COLUMN payment_day    INTEGER NOT NULL DEFAULT 0;
 `,
+	`
+ALTER TABLE accounts ADD COLUMN repay_by        TEXT    NOT NULL DEFAULT '';
+ALTER TABLE accounts ADD COLUMN min_payment     INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE accounts ADD COLUMN min_payment_due TEXT    NOT NULL DEFAULT '';
+ALTER TABLE accounts ADD COLUMN statement_at    TEXT    NOT NULL DEFAULT '';
+-- Credit cards used to keep the minimum payment as a monthly payment.
+UPDATE accounts SET
+	min_payment    = payment_amount,
+	statement_at   = strftime('%Y-%m-%dT%H:%M:%f', 'now') || '000000Z',
+	payment_amount = 0,
+	payment_day    = 0
+WHERE kind = 'credit' AND payment_amount > 0;
+UPDATE accounts SET payment_day = 0 WHERE kind = 'credit';
+`,
 }
 
 // schemaVersion is the current schema version.
@@ -76,6 +90,24 @@ var schemaVersion = len(migrations)
 
 // timeLayout is fixed-width so that strings sort the same way as the times.
 const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
+
+// dateLayout is used for calendar dates.
+const dateLayout = "2006-01-02"
+
+// formatOpt formats an optional time; the zero time is stored as an empty string.
+func formatOpt(t time.Time, layout string) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(layout)
+}
+
+func parseOpt(s, layout string) (time.Time, error) {
+	if s == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(layout, s)
+}
 
 type Store struct {
 	mu    sync.Mutex
@@ -238,10 +270,12 @@ func persist(ctx context.Context, tx *sql.Tx, u *User, before map[int64]bool) er
 	}
 	for _, a := range u.Accounts {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO accounts (user_id, id, name, kind, currency, archived, created_at, credit_limit, payment_amount, payment_day)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			INSERT INTO accounts (user_id, id, name, kind, currency, archived, created_at, credit_limit, payment_amount, payment_day,
+				repay_by, min_payment, min_payment_due, statement_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			u.ID, a.ID, a.Name, string(a.Kind), a.Currency, a.Archived, a.CreatedAt.UTC().Format(timeLayout),
-			a.CreditLimit, a.PaymentAmount, a.PaymentDay); err != nil {
+			a.CreditLimit, a.PaymentAmount, a.PaymentDay,
+			formatOpt(a.RepayBy, dateLayout), a.MinPayment, formatOpt(a.MinPaymentDue, dateLayout), formatOpt(a.StatementAt, timeLayout)); err != nil {
 			return err
 		}
 	}
@@ -310,18 +344,28 @@ func loadUsers(ctx context.Context, db *sql.DB, onlyID int64) (map[int64]*User, 
 	}
 
 	err = query(ctx, db, `
-		SELECT user_id, id, name, kind, currency, archived, created_at, credit_limit, payment_amount, payment_day
+		SELECT user_id, id, name, kind, currency, archived, created_at, credit_limit, payment_amount, payment_day,
+			repay_by, min_payment, min_payment_due, statement_at
 		FROM accounts WHERE (? = 0 OR user_id = ?) ORDER BY user_id, id`,
 		onlyID, func(rows *sql.Rows) error {
 			var uid int64
-			var created string
+			var created, repayBy, minDue, statementAt string
 			a := &Account{}
 			if err := rows.Scan(&uid, &a.ID, &a.Name, &a.Kind, &a.Currency, &a.Archived, &created,
-				&a.CreditLimit, &a.PaymentAmount, &a.PaymentDay); err != nil {
+				&a.CreditLimit, &a.PaymentAmount, &a.PaymentDay, &repayBy, &a.MinPayment, &minDue, &statementAt); err != nil {
 				return err
 			}
 			var err error
 			if a.CreatedAt, err = time.Parse(timeLayout, created); err != nil {
+				return err
+			}
+			if a.RepayBy, err = parseOpt(repayBy, dateLayout); err != nil {
+				return err
+			}
+			if a.MinPaymentDue, err = parseOpt(minDue, dateLayout); err != nil {
+				return err
+			}
+			if a.StatementAt, err = parseOpt(statementAt, timeLayout); err != nil {
 				return err
 			}
 			if u := users[uid]; u != nil {

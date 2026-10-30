@@ -38,6 +38,12 @@ type Account struct {
 	CreditLimit   int64 `json:"credit_limit,omitempty"`   // credit card limit; available = limit + balance
 	PaymentAmount int64 `json:"payment_amount,omitempty"` // monthly payment
 	PaymentDay    int   `json:"payment_day,omitempty"`    // day of month of the payment, 1–31
+
+	// Credit cards only. Dates are calendar dates at midnight UTC; zero means "not set".
+	RepayBy       time.Time `json:"repay_by,omitzero"`        // the whole debt must be repaid by this date (grace period end)
+	MinPayment    int64     `json:"min_payment,omitempty"`    // minimum payment from the latest statement
+	MinPaymentDue time.Time `json:"min_payment_due,omitzero"` // due date of the minimum payment
+	StatementAt   time.Time `json:"statement_at,omitzero"`    // when the minimum payment was entered; later top-ups count towards it
 }
 
 // Available is the credit card limit left to spend; ok is false when no limit is set.
@@ -241,6 +247,24 @@ func (u *User) Balances() map[int64]int64 {
 }
 
 func (u *User) Balance(accID int64) int64 { return u.Balances()[accID] }
+
+// PaidSince sums the money put on an account since the given time: incoming
+// transfers and income. Adjustments are not counted.
+func (u *User) PaidSince(accID int64, since time.Time) int64 {
+	var sum int64
+	for _, t := range u.Transactions {
+		if t.CreatedAt.Before(since) {
+			continue
+		}
+		switch {
+		case t.Type == TxTransfer && t.ToAccountID == accID:
+			sum += t.ToAmount
+		case t.Type == TxIncome && t.AccountID == accID:
+			sum += t.Amount
+		}
+	}
+	return sum
+}
 
 func (u *User) AddTransaction(t Transaction, now time.Time) *Transaction {
 	t.ID = u.nextID()

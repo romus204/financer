@@ -659,3 +659,81 @@ func TestMigrateFromV1KeepsData(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStatementFieldsPersist(t *testing.T) {
+	s, p := openTemp(t)
+	due := time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)
+	repay := time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC)
+	var withID, withoutID int64
+	_ = s.Update(1, func(u *User) error {
+		a := u.AddAccount("Кредитка", KindCredit, "RUB", t0)
+		a.MinPayment, a.MinPaymentDue, a.RepayBy, a.StatementAt = 300000, due, repay, t0
+		withID = a.ID
+		withoutID = u.AddAccount("Пустая", KindCredit, "RUB", t0).ID
+		return nil
+	})
+	s2 := reopen(t, s, p)
+	s2.View(1, func(u *User) {
+		a := u.Account(withID)
+		if a.MinPayment != 300000 || !a.MinPaymentDue.Equal(due) || !a.RepayBy.Equal(repay) || !a.StatementAt.Equal(t0) {
+			t.Errorf("account = %+v", a)
+		}
+		if b := u.Account(withoutID); !b.MinPaymentDue.IsZero() || !b.RepayBy.IsZero() || !b.StatementAt.IsZero() {
+			t.Errorf("unset dates must stay zero: %+v", b)
+		}
+	})
+}
+
+func TestPaidSince(t *testing.T) {
+	u := newUser(1)
+	card := u.AddAccount("card", KindBank, "RUB", t0)
+	credit := u.AddAccount("credit", KindCredit, "RUB", t0)
+	later := t0.Add(time.Hour)
+	u.AddTransaction(Transaction{Type: TxTransfer, AccountID: card.ID, Amount: 100, ToAccountID: credit.ID, ToAmount: 100}, t0.Add(-time.Minute))
+	u.AddTransaction(Transaction{Type: TxTransfer, AccountID: card.ID, Amount: 200, ToAccountID: credit.ID, ToAmount: 200}, later)
+	u.AddTransaction(Transaction{Type: TxIncome, AccountID: credit.ID, Amount: 30}, later)
+	u.AddTransaction(Transaction{Type: TxExpense, AccountID: credit.ID, Amount: 1000}, later)
+	u.AddTransaction(Transaction{Type: TxAdjust, AccountID: credit.ID, Amount: 5000}, later)
+	u.AddTransaction(Transaction{Type: TxTransfer, AccountID: credit.ID, Amount: 7, ToAccountID: card.ID, ToAmount: 7}, later)
+	if got := u.PaidSince(credit.ID, t0); got != 230 {
+		t.Errorf("PaidSince = %d, want 230", got)
+	}
+}
+
+func TestMigrateV2MovesCreditPaymentToMinPayment(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "data.db")
+	db, err := sql.Open("sqlite", "file:"+p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := t0.Format(timeLayout)
+	for _, q := range []string{
+		migrations[0],
+		migrations[1],
+		`PRAGMA user_version = 2`,
+		`INSERT INTO users (id, base_currency) VALUES (1, 'RUB')`,
+		`INSERT INTO accounts (user_id, id, name, kind, currency, created_at, payment_amount, payment_day) VALUES
+			(1, 1, 'Кредитка', 'credit', 'RUB', '` + created + `', 300000, 15),
+			(1, 2, 'Ипотека',  'loan',   'RUB', '` + created + `', 5000000, 5)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	s.View(1, func(u *User) {
+		c := u.Account(1)
+		if c.MinPayment != 300000 || c.StatementAt.IsZero() || c.PaymentAmount != 0 || c.PaymentDay != 0 || !c.MinPaymentDue.IsZero() {
+			t.Errorf("credit = %+v", c)
+		}
+		if l := u.Account(2); l.PaymentAmount != 5000000 || l.PaymentDay != 5 || l.MinPayment != 0 {
+			t.Errorf("loan = %+v", l)
+		}
+	})
+}

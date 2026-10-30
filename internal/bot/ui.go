@@ -210,16 +210,81 @@ func paymentLine(a *storage.Account, now time.Time) string {
 
 // paymentDate formats an upcoming date: «сегодня», «завтра» or «15 ноября».
 func paymentDate(t, now time.Time) string {
+	if rel := relativeDay(t, now); rel != "" {
+		return rel
+	}
+	return dayMonth(t, now)
+}
+
+// dateLabel formats a date with a hint for the nearest days: «15 ноября (завтра)».
+func dateLabel(t, now time.Time) string {
+	if rel := relativeDay(t, now); rel != "" {
+		return dayMonth(t, now) + " (" + rel + ")"
+	}
+	return dayMonth(t, now)
+}
+
+func relativeDay(t, now time.Time) string {
 	switch t.Format("2006-01-02") {
 	case now.Format("2006-01-02"):
 		return "сегодня"
 	case now.AddDate(0, 0, 1).Format("2006-01-02"):
 		return "завтра"
 	}
+	return ""
+}
+
+// dayMonth formats «15 ноября», adding the year if it differs from the current one.
+func dayMonth(t, now time.Time) string {
 	if t.Year() != now.Year() {
 		return fmt.Sprintf("%d %s %d", t.Day(), monthGenitive[t.Month()-1], t.Year())
 	}
 	return fmt.Sprintf("%d %s", t.Day(), monthGenitive[t.Month()-1])
+}
+
+// civilDate is the calendar date of t as midnight UTC, the way dates are stored.
+func civilDate(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// statementLines describes the minimum payment and the grace period of a credit card.
+// paid is the money put on the card since the minimum payment was entered.
+func statementLines(a *storage.Account, bal, paid int64, now time.Time) string {
+	today := civilDate(now)
+	var lines []string
+	if a.MinPayment > 0 {
+		line := fmt.Sprintf("🧾 Мин. платёж: <b>%s</b>", money.Format(a.MinPayment, a.Currency))
+		if !a.MinPaymentDue.IsZero() {
+			line += " до " + dateLabel(a.MinPaymentDue, now)
+		}
+		left := minPaymentLeft(a, bal, paid)
+		switch {
+		case left <= 0:
+			line += " · ✅ внесён"
+		case !a.MinPaymentDue.IsZero() && a.MinPaymentDue.Before(today):
+			line += " · ⚠️ просрочен, осталось " + money.Format(left, a.Currency)
+		case paid > 0:
+			line += " · осталось " + money.Format(left, a.Currency)
+		}
+		lines = append(lines, line)
+	}
+	if !a.RepayBy.IsZero() {
+		switch {
+		case bal >= 0:
+			lines = append(lines, "⏳ Льготный период до "+dateLabel(a.RepayBy, now)+" · ✅ долг погашен")
+		case a.RepayBy.Before(today):
+			lines = append(lines, "⚠️ Льготный период закончился "+dayMonth(a.RepayBy, now)+" — могут начисляться проценты")
+		default:
+			lines = append(lines, "⏳ Погасить весь долг до "+dateLabel(a.RepayBy, now))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// minPaymentLeft is how much of the minimum payment is still to be paid; it never
+// exceeds the debt itself.
+func minPaymentLeft(a *storage.Account, bal, paid int64) int64 {
+	return max(0, min(a.MinPayment-paid, -bal))
 }
 
 func dayTitle(t, now time.Time) string {
