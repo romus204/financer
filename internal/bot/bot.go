@@ -39,15 +39,20 @@ func New(api *tg.Client, store *storage.Store, rates *rates.Service, cfg Config)
 type step int
 
 const (
-	stepIdle        step = iota
-	stepAmount           // transaction amount
-	stepTransferTo       // amount credited in a cross-currency transfer
-	stepNote             // note for the draft
-	stepAccCurrency      // currency code of a new account
-	stepAccName          // name of a new account
-	stepAccBalance       // opening balance of a new account
+	stepIdle         step = iota
+	stepAmount            // transaction amount
+	stepTransferTo        // amount credited in a cross-currency transfer
+	stepNote              // note for the draft
+	stepAccCurrency       // currency code of a new account
+	stepAccName           // name of a new account
+	stepAccBalance        // opening balance of a new account
+	stepAccDebt           // current debt of a new credit card or loan
+	stepAccAvailable      // available amount of a new credit card
+	stepAccPayAmount      // monthly payment of a credit card or loan
+	stepAccPayDay         // day of month of the payment
 	stepAccRename
 	stepAccAdjust
+	stepAccLimit // available amount of an existing credit card
 	stepCatAdd
 )
 
@@ -223,7 +228,8 @@ func (b *Bot) onMessage(ctx context.Context, m *tg.Message) {
 		b.inputTransferTo(r, s, text)
 	case stepNote:
 		b.inputNote(r, s, text)
-	case stepAccCurrency, stepAccName, stepAccBalance, stepAccRename, stepAccAdjust:
+	case stepAccCurrency, stepAccName, stepAccBalance, stepAccDebt, stepAccAvailable,
+		stepAccPayAmount, stepAccPayDay, stepAccRename, stepAccAdjust, stepAccLimit:
 		b.inputAccount(r, s, text)
 	case stepCatAdd:
 		b.inputCategory(r, s, text)
@@ -324,6 +330,8 @@ func (b *Bot) cmdHelp(r *req) {
 <b>🔁 Перевод</b> — между своими счетами: снятие наличных, пополнение карты, обмен валюты. Если валюты разные, бот спросит, сколько пришло (и подскажет по курсу).
 
 <b>🏦 Счета</b> — добавить, переименовать, выбрать основной (⭐), удалить. <b>🎯 Изменить баланс</b> — если остаток в боте разошёлся с реальным, введи фактическую сумму, разница запишется корректировкой.
+
+<b>💸 Кредитки и 🧾 кредиты</b> — тоже счета: укажи долг, доступную сумму (для кредитки), сумму и день ежемесячного платежа (по желанию). Покупка по кредитке — обычный расход с неё, погашение — 🔁 перевод на неё с карты. Ближайшие платежи видны в 💼 Балансе.
 
 <b>💼 Баланс</b> — остатки по каждому счёту, итоги по валютам и общий итог в основной валюте.
 <b>📜 История</b> — последние операции, любую можно открыть и удалить.

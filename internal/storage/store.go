@@ -60,9 +60,19 @@ CREATE TABLE IF NOT EXISTS transactions (
 CREATE INDEX IF NOT EXISTS transactions_by_time ON transactions (user_id, created_at);
 `
 
-// schemaVersion is the current schema version (PRAGMA user_version). Future migrations
-// are added to migrate and applied by version number.
-const schemaVersion = 1
+// migrations[i] upgrades the schema from version i to i+1 (PRAGMA user_version).
+// New migrations are appended to the end.
+var migrations = []string{
+	schema,
+	`
+ALTER TABLE accounts ADD COLUMN credit_limit   INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE accounts ADD COLUMN payment_amount INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE accounts ADD COLUMN payment_day    INTEGER NOT NULL DEFAULT 0;
+`,
+}
+
+// schemaVersion is the current schema version.
+var schemaVersion = len(migrations)
 
 // timeLayout is fixed-width so that strings sort the same way as the times.
 const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
@@ -113,14 +123,24 @@ func migrate(db *sql.DB) error {
 	if version > schemaVersion {
 		return fmt.Errorf("база создана более новой версией бота (схема %d, поддерживается %d)", version, schemaVersion)
 	}
-	if version == schemaVersion {
-		return nil
+	for v := version; v < schemaVersion; v++ {
+		tx, err := db.Begin()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(migrations[v]); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("миграция %d → %d: %w", v, v+1, err)
+		}
+		if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", v+1)); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return err
+		}
 	}
-	if _, err := db.Exec(schema); err != nil {
-		return err
-	}
-	_, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", schemaVersion))
-	return err
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -218,8 +238,10 @@ func persist(ctx context.Context, tx *sql.Tx, u *User, before map[int64]bool) er
 	}
 	for _, a := range u.Accounts {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO accounts (user_id, id, name, kind, currency, archived, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			u.ID, a.ID, a.Name, string(a.Kind), a.Currency, a.Archived, a.CreatedAt.UTC().Format(timeLayout)); err != nil {
+			INSERT INTO accounts (user_id, id, name, kind, currency, archived, created_at, credit_limit, payment_amount, payment_day)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			u.ID, a.ID, a.Name, string(a.Kind), a.Currency, a.Archived, a.CreatedAt.UTC().Format(timeLayout),
+			a.CreditLimit, a.PaymentAmount, a.PaymentDay); err != nil {
 			return err
 		}
 	}
@@ -287,12 +309,15 @@ func loadUsers(ctx context.Context, db *sql.DB, onlyID int64) (map[int64]*User, 
 		return nil, fmt.Errorf("чтение категорий: %w", err)
 	}
 
-	err = query(ctx, db, `SELECT user_id, id, name, kind, currency, archived, created_at FROM accounts WHERE (? = 0 OR user_id = ?) ORDER BY user_id, id`,
+	err = query(ctx, db, `
+		SELECT user_id, id, name, kind, currency, archived, created_at, credit_limit, payment_amount, payment_day
+		FROM accounts WHERE (? = 0 OR user_id = ?) ORDER BY user_id, id`,
 		onlyID, func(rows *sql.Rows) error {
 			var uid int64
 			var created string
 			a := &Account{}
-			if err := rows.Scan(&uid, &a.ID, &a.Name, &a.Kind, &a.Currency, &a.Archived, &created); err != nil {
+			if err := rows.Scan(&uid, &a.ID, &a.Name, &a.Kind, &a.Currency, &a.Archived, &created,
+				&a.CreditLimit, &a.PaymentAmount, &a.PaymentDay); err != nil {
 				return err
 			}
 			var err error

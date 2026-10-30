@@ -9,7 +9,8 @@ Written in Go; the only external dependency is the SQLite driver [`modernc.org/s
 
 ## Features
 
-- **Two account types**: 💳 card / bank account and 💵 cash, each in its own currency (RUB, USD, EUR, KZT, … or any code, e.g. `USDT`).
+- **Account types**: 💳 card / bank account, 💵 cash, 💸 credit card and 🧾 loan, each in its own currency (RUB, USD, EUR, KZT, … or any code, e.g. `USDT`).
+- **Credit cards and loans**: the current debt, the available amount (credit cards) and, optionally, the monthly payment amount and day. Purchases on a credit card are ordinary expenses from it, repayments are transfers to it; upcoming payments are listed on the balance screen.
 - **Quick entry in a single message**:
   - `350 кофе` — an expense from the main account;
   - `+50000 зарплата` — income;

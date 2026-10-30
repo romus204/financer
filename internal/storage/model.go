@@ -8,9 +8,14 @@ import (
 type AccountKind string
 
 const (
-	KindBank AccountKind = "bank" // card or bank account
-	KindCash AccountKind = "cash" // cash
+	KindBank   AccountKind = "bank"   // card or bank account
+	KindCash   AccountKind = "cash"   // cash
+	KindCredit AccountKind = "credit" // credit card; the debt is a negative balance
+	KindLoan   AccountKind = "loan"   // loan; the debt is a negative balance
 )
+
+// IsDebt reports whether the account tracks a debt (credit card or loan).
+func (k AccountKind) IsDebt() bool { return k == KindCredit || k == KindLoan }
 
 type TxType string
 
@@ -28,6 +33,36 @@ type Account struct {
 	Currency  string      `json:"currency"`
 	Archived  bool        `json:"archived,omitempty"`
 	CreatedAt time.Time   `json:"created_at"`
+
+	// Credit cards and loans only; zero means "not set".
+	CreditLimit   int64 `json:"credit_limit,omitempty"`   // credit card limit; available = limit + balance
+	PaymentAmount int64 `json:"payment_amount,omitempty"` // monthly payment
+	PaymentDay    int   `json:"payment_day,omitempty"`    // day of month of the payment, 1–31
+}
+
+// Available is the credit card limit left to spend; ok is false when no limit is set.
+func (a *Account) Available(balance int64) (v int64, ok bool) {
+	if a.CreditLimit <= 0 {
+		return 0, false
+	}
+	return a.CreditLimit + balance, true
+}
+
+// NextPayment returns the nearest payment date not before the day of now. If the month
+// is shorter than PaymentDay, the payment falls on its last day.
+func (a *Account) NextPayment(now time.Time) (time.Time, bool) {
+	if a.PaymentDay < 1 || a.PaymentDay > 31 {
+		return time.Time{}, false
+	}
+	y, m, d := now.Date()
+	day := func(y int, m time.Month) time.Time {
+		last := time.Date(y, m+1, 0, 0, 0, 0, 0, now.Location()).Day()
+		return time.Date(y, m, min(a.PaymentDay, last), 0, 0, 0, 0, now.Location())
+	}
+	if p := day(y, m); p.Day() >= d {
+		return p, true
+	}
+	return day(y, m+1), true
 }
 
 // Transaction is a single operation. Amounts are in hundredths of the account's currency.

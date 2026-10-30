@@ -1250,3 +1250,271 @@ func TestUnknownCommandWhileAwaitingInputIsNotConsumed(t *testing.T) {
 	h.type_("50 x") // still awaiting amount
 	contains(t, h.tg.last(t).text(), "Выберите категорию")
 }
+
+func TestAddCreditCard(t *testing.T) {
+	h := newHarness(t, "")
+	h.press(1, "a:new")
+	h.press(1, "a:k:credit")
+	h.press(1, "a:c:RUB")
+	h.type_("Платинум")
+	contains(t, h.tg.last(t).text(), "долг")
+	h.type_("-5")
+	contains(t, h.tg.last(t).text(), "положительным")
+	h.type_("15 000")
+	contains(t, h.tg.last(t).text(), "доступно")
+	h.type_("85000")
+	contains(t, h.tg.last(t).text(), "каждый месяц")
+	h.type_("3000")
+	contains(t, h.tg.last(t).text(), "Какого числа")
+	h.type_("32")
+	contains(t, h.tg.last(t).text(), "от 1 до 31")
+	h.type_("25.11")
+
+	h.user(func(u *storage.User) {
+		if len(u.Accounts) != 1 {
+			t.Fatalf("accounts = %+v", u.Accounts)
+		}
+		a := u.Accounts[0]
+		if a.Kind != storage.KindCredit || a.CreditLimit != 10000000 || a.PaymentAmount != 300000 || a.PaymentDay != 25 {
+			t.Errorf("account = %+v", a)
+		}
+		if u.Balance(a.ID) != -1500000 {
+			t.Errorf("balance = %d", u.Balance(a.ID))
+		}
+	})
+	edits := h.tg.byMethod("editMessageText")
+	sends := h.tg.byMethod("sendMessage")
+	text := edits[len(edits)-1].text() + sends[0].text()
+	if !strings.Contains(text, "Счёт добавлен") && !strings.Contains(h.tg.last(t).text(), "Готово") {
+		t.Errorf("no confirmation: %q", text)
+	}
+	h.press(1, "bal")
+	got := h.tg.last(t).text()
+	contains(t, got, "Кредитные карты")
+	contains(t, got, "долг <b>"+money.Format(1500000, "RUB"))
+	contains(t, got, "доступно "+money.Format(8500000, "RUB"))
+	contains(t, got, "Ближайшие платежи")
+	contains(t, got, money.Format(300000, "RUB"))
+}
+
+func TestAddLoanSkippingPayment(t *testing.T) {
+	h := newHarness(t, "")
+	h.press(1, "a:new")
+	h.press(1, "a:k:loan")
+	h.press(1, "a:c:RUB")
+	h.type_("Ипотека")
+	h.type_("2000000")
+	// loans have no "available" step
+	if !h.tg.last(t).hasButton("a:ps") {
+		t.Fatalf("expected payment amount step, buttons = %v", h.tg.last(t).buttons())
+	}
+	h.press(1, "a:ps")
+	h.press(1, "a:pds")
+	h.user(func(u *storage.User) {
+		if len(u.Accounts) != 1 {
+			t.Fatalf("accounts = %+v", u.Accounts)
+		}
+		a := u.Accounts[0]
+		if a.Kind != storage.KindLoan || a.CreditLimit != 0 || a.PaymentAmount != 0 || a.PaymentDay != 0 || u.Balance(a.ID) != -200000000 {
+			t.Errorf("account = %+v, balance %d", a, u.Balance(a.ID))
+		}
+	})
+	h.press(1, "bal")
+	contains(t, h.tg.last(t).text(), "Кредиты")
+	if strings.Contains(h.tg.last(t).text(), "Ближайшие платежи") {
+		t.Error("no payment day => no upcoming payments")
+	}
+}
+
+func TestCreditStaleSkipCallbacks(t *testing.T) {
+	h := newHarness(t, "")
+	for _, cb := range []string{"a:d0", "a:ls", "a:ps", "a:pds"} {
+		h.press(1, cb)
+		contains(t, h.tg.last(t).text(), "устарело")
+	}
+	// a skip button from another step must not apply
+	h.press(1, "a:new")
+	h.press(1, "a:k:credit")
+	h.press(1, "a:c:RUB")
+	h.type_("Карта")
+	h.press(1, "a:pds")
+	contains(t, h.tg.last(t).text(), "устарело")
+	h.user(func(u *storage.User) {
+		if len(u.Accounts) != 0 {
+			t.Errorf("accounts = %+v", u.Accounts)
+		}
+	})
+}
+
+func TestEditCreditPaymentLimitAndDebt(t *testing.T) {
+	h := newHarness(t, "")
+	a := h.addAccount("Кредитка", storage.KindCredit, "RUB", -1000000)
+	sa := strconv.FormatInt(a, 10)
+
+	h.press(1, "a:v:"+sa)
+	if last := h.tg.last(t); !last.hasButton("a:pay:"+sa) || !last.hasButton("a:lim:"+sa) {
+		t.Errorf("buttons = %v", last.buttons())
+	}
+	contains(t, h.tg.last(t).text(), "Долг: <b>"+money.Format(1000000, "RUB"))
+
+	h.press(1, "a:pay:"+sa)
+	h.type_("2500")
+	h.type_("10")
+	h.user(func(u *storage.User) {
+		if acc := u.Account(a); acc.PaymentAmount != 250000 || acc.PaymentDay != 10 {
+			t.Errorf("payment = %d / %d", acc.PaymentAmount, acc.PaymentDay)
+		}
+	})
+	contains(t, h.tg.last(t).text(), "Платёж сохранён")
+	contains(t, h.tg.last(t).text(), "10-го числа")
+
+	h.press(1, "a:lim:"+sa)
+	h.type_("40000") // available 40 000 with debt 10 000 => limit 50 000
+	h.user(func(u *storage.User) {
+		if l := u.Account(a).CreditLimit; l != 5000000 {
+			t.Errorf("limit = %d", l)
+		}
+	})
+
+	h.press(1, "a:adj:"+sa)
+	contains(t, h.tg.last(t).text(), "долг")
+	h.type_("12000")
+	if got := h.balance(a); got != -1200000 {
+		t.Errorf("balance = %d, want -1200000", got)
+	}
+	contains(t, h.tg.last(t).text(), "Доступно: <b>"+money.Format(3800000, "RUB"))
+
+	h.press(1, "a:pc:"+sa)
+	h.user(func(u *storage.User) {
+		if acc := u.Account(a); acc.PaymentAmount != 0 || acc.PaymentDay != 0 {
+			t.Errorf("payment not cleared: %+v", acc)
+		}
+	})
+}
+
+func TestPayingOffCreditCardByTransfer(t *testing.T) {
+	h := newHarness(t, "")
+	card := h.addAccount("Дебетовая", storage.KindBank, "RUB", 5000000)
+	credit := h.addAccount("Кредитка", storage.KindCredit, "RUB", -1000000)
+	startTransfer(h, card, credit)
+	h.type_("4000")
+	if got := h.balance(credit); got != -600000 {
+		t.Errorf("credit balance = %d", got)
+	}
+}
+
+func TestPaymentDayIgnoredForBankAccount(t *testing.T) {
+	h := newHarness(t, "")
+	a := h.addAccount("Карта", storage.KindBank, "RUB", 0)
+	h.press(1, "a:pay:"+strconv.FormatInt(a, 10))
+	h.user(func(u *storage.User) {
+		if u.Account(a).PaymentDay != 0 {
+			t.Error("payment set on a bank account")
+		}
+	})
+	if h.sessionStep() != stepIdle {
+		t.Error("session must stay idle")
+	}
+}
+
+func (h *harness) sessionStep() step { return h.b.sess(testUser).step }
+
+func TestParsePayDay(t *testing.T) {
+	for in, want := range map[string]int{"1": 1, " 31 ": 31, "15.11": 15, "05.12.2026": 5, "7/1": 7} {
+		if got, ok := parsePayDay(in); !ok || got != want {
+			t.Errorf("parsePayDay(%q) = %d %v", in, got, ok)
+		}
+	}
+	for _, in := range []string{"", "0", "32", "abc", ".5", "-3"} {
+		if _, ok := parsePayDay(in); ok {
+			t.Errorf("parsePayDay(%q) must fail", in)
+		}
+	}
+}
+
+func TestPaymentDate(t *testing.T) {
+	now := time.Date(2026, 12, 30, 15, 0, 0, 0, time.UTC)
+	cases := map[time.Time]string{
+		time.Date(2026, 12, 30, 0, 0, 0, 0, time.UTC): "сегодня",
+		time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC): "завтра",
+		time.Date(2027, 1, 5, 0, 0, 0, 0, time.UTC):   "5 января 2027",
+	}
+	for d, want := range cases {
+		if got := paymentDate(d, now); got != want {
+			t.Errorf("paymentDate(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+func TestEditPaymentSkipKeepsValuesAndIgnoresStaleCreation(t *testing.T) {
+	h := newHarness(t, "")
+	a := h.addAccount("Кредит", storage.KindLoan, "RUB", -1000000)
+	sa := strconv.FormatInt(a, 10)
+	_ = h.b.store.Update(testUser, func(u *storage.User) error {
+		u.Account(a).PaymentAmount, u.Account(a).PaymentDay = 500000, 20
+		return nil
+	})
+	h.press(1, "a:pay:"+sa)
+	// stale buttons from an old "new account" message must not hijack the edit
+	h.press(1, "a:c:USD")
+	h.press(1, "a:k:bank")
+	h.press(1, "a:d0")
+	contains(t, h.tg.last(t).text(), "устарело")
+	h.press(1, "a:ps") // keep the amount
+	h.type_("5")
+	h.user(func(u *storage.User) {
+		if len(u.Accounts) != 1 {
+			t.Fatalf("accounts = %+v", u.Accounts)
+		}
+		if acc := u.Account(a); acc.PaymentAmount != 500000 || acc.PaymentDay != 5 {
+			t.Errorf("payment = %d / %d", acc.PaymentAmount, acc.PaymentDay)
+		}
+	})
+}
+
+func TestLimitOnlyForCreditCardsAndDebtNotNegative(t *testing.T) {
+	h := newHarness(t, "")
+	loan := h.addAccount("Кредит", storage.KindLoan, "RUB", -1000000)
+	h.press(1, "a:lim:"+strconv.FormatInt(loan, 10))
+	if h.sessionStep() != stepIdle {
+		t.Error("limit edit started on a loan")
+	}
+	card := h.addAccount("Кредитка", storage.KindCredit, "RUB", 0)
+	sc := strconv.FormatInt(card, 10)
+	h.press(1, "a:lim:"+sc)
+	h.type_("0")
+	contains(t, h.tg.last(t).text(), "не может быть")
+	h.press(1, "a:adj:"+sc)
+	h.type_("-100")
+	contains(t, h.tg.last(t).text(), "не может быть отрицательным")
+	if got := h.balance(card); got != 0 {
+		t.Errorf("balance = %d", got)
+	}
+}
+
+func TestBalanceSeparatesDebts(t *testing.T) {
+	h := newHarness(t, ratesServer(t))
+	h.addAccount("Rub", storage.KindBank, "RUB", 900000)
+	h.addAccount("Usd", storage.KindBank, "USD", 10000) // 100 USD = 9000 RUB
+	h.addAccount("Кредитка", storage.KindCredit, "RUB", -300000)
+	h.type_(btnBalance)
+	txt := h.tg.last(t).text()
+	byCur := txt[strings.Index(txt, "По валютам"):strings.Index(txt, "Долги")]
+	contains(t, byCur, money.Format(900000, "RUB")) // own money only, the debt is not subtracted
+	contains(t, txt, "<b>Долги</b>\n"+money.Format(300000, "RUB"))
+	contains(t, txt, "Всего ≈ <b>"+money.Format(1800000, "RUB"))
+	contains(t, txt, "За вычетом долгов ≈ <b>"+money.Format(1500000, "RUB"))
+}
+
+func TestBalanceDebtsInBaseCurrencyOnly(t *testing.T) {
+	h := newHarness(t, "")
+	h.addAccount("Rub", storage.KindBank, "RUB", 900000)
+	h.addAccount("Ипотека", storage.KindLoan, "RUB", -500000)
+	h.type_(btnBalance)
+	txt := h.tg.last(t).text()
+	if strings.Contains(txt, "По валютам") {
+		t.Error("single own account must not get a per-currency section")
+	}
+	contains(t, txt, "Всего <b>"+money.Format(900000, "RUB"))
+	contains(t, txt, "За вычетом долгов <b>"+money.Format(400000, "RUB"))
+}

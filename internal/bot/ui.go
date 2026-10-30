@@ -140,15 +140,25 @@ func currencyLabel(code string) string {
 func esc(s string) string { return html.EscapeString(s) }
 
 func kindIcon(k storage.AccountKind) string {
-	if k == storage.KindCash {
+	switch k {
+	case storage.KindCash:
 		return "💵"
+	case storage.KindCredit:
+		return "💸"
+	case storage.KindLoan:
+		return "🧾"
 	}
 	return "💳"
 }
 
 func kindName(k storage.AccountKind) string {
-	if k == storage.KindCash {
+	switch k {
+	case storage.KindCash:
 		return "Наличные"
+	case storage.KindCredit:
+		return "Кредитная карта"
+	case storage.KindLoan:
+		return "Кредит"
 	}
 	return "Карта / счёт"
 }
@@ -179,6 +189,37 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string([]rune(s)[:n-1]) + "…"
+}
+
+// paymentLine describes the monthly payment of a credit card or loan; empty if it isn't set.
+func paymentLine(a *storage.Account, now time.Time) string {
+	var parts []string
+	if a.PaymentAmount > 0 {
+		parts = append(parts, "<b>"+money.Format(a.PaymentAmount, a.Currency)+"</b>")
+	}
+	if next, ok := a.NextPayment(now); ok {
+		parts = append(parts, fmt.Sprintf("%d-го числа, ближайший — %s", a.PaymentDay, paymentDate(next, now)))
+	} else if a.PaymentAmount > 0 {
+		parts = append(parts, "в месяц")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "📅 Платёж: " + strings.Join(parts, " · ")
+}
+
+// paymentDate formats an upcoming date: «сегодня», «завтра» or «15 ноября».
+func paymentDate(t, now time.Time) string {
+	switch t.Format("2006-01-02") {
+	case now.Format("2006-01-02"):
+		return "сегодня"
+	case now.AddDate(0, 0, 1).Format("2006-01-02"):
+		return "завтра"
+	}
+	if t.Year() != now.Year() {
+		return fmt.Sprintf("%d %s %d", t.Day(), monthGenitive[t.Month()-1], t.Year())
+	}
+	return fmt.Sprintf("%d %s", t.Day(), monthGenitive[t.Month()-1])
 }
 
 func dayTitle(t, now time.Time) string {

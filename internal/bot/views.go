@@ -2,6 +2,7 @@ package bot
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"math"
 	"slices"
@@ -38,28 +39,101 @@ func (b *Bot) showBalance(r *req) {
 
 	var sb strings.Builder
 	sb.WriteString("💼 <b>Баланс</b>\n")
-	for _, kind := range []storage.AccountKind{storage.KindBank, storage.KindCash} {
+	sections := []struct {
+		kind  storage.AccountKind
+		title string
+	}{
+		{storage.KindBank, "💳 <b>Карты и счета</b>"},
+		{storage.KindCash, "💵 <b>Наличные</b>"},
+		{storage.KindCredit, "💸 <b>Кредитные карты</b>"},
+		{storage.KindLoan, "🧾 <b>Кредиты</b>"},
+	}
+	for _, sec := range sections {
 		header := false
 		for _, a := range accs {
-			if a.Kind != kind {
+			if a.Kind != sec.kind {
 				continue
 			}
 			if !header {
-				title := "💳 <b>Карты и счета</b>"
-				if kind == storage.KindCash {
-					title = "💵 <b>Наличные</b>"
-				}
-				sb.WriteString("\n" + title + "\n")
+				sb.WriteString("\n" + sec.title + "\n")
 				header = true
 			}
-			fmt.Fprintf(&sb, "%s — <b>%s</b>\n", esc(a.Name), money.Format(a.Balance, a.Currency))
+			if !a.Kind.IsDebt() || a.Balance > 0 {
+				fmt.Fprintf(&sb, "%s — <b>%s</b>\n", esc(a.Name), money.Format(a.Balance, a.Currency))
+				continue
+			}
+			fmt.Fprintf(&sb, "%s — долг <b>%s</b>", esc(a.Name), money.Format(-a.Balance, a.Currency))
+			if avail, ok := a.Available(a.Balance); ok {
+				sb.WriteString(" · доступно " + money.Format(avail, a.Currency))
+			}
+			sb.WriteString("\n")
+		}
+	}
+	sb.WriteString(upcomingPayments(accs, time.Now().In(b.cfg.Location)))
+
+	// Own money and debts are totalled separately; debts are positive amounts owed.
+	own, debts := map[string]int64{}, map[string]int64{}
+	nOwn := 0
+	for _, a := range accs {
+		if a.Kind.IsDebt() {
+			debts[a.Currency] -= a.Balance
+		} else {
+			own[a.Currency] += a.Balance
+			nOwn++
+		}
+	}
+	ownCurs, debtCurs := sortCurrencies(own, base), sortCurrencies(debts, base)
+	hasDebts := len(debtCurs) > 0
+
+	if nOwn > 1 {
+		sb.WriteString("\n<b>По валютам</b>\n")
+		for _, c := range ownCurs {
+			sb.WriteString(money.Format(own[c], c) + "\n")
+		}
+	}
+	if hasDebts {
+		sb.WriteString("\n<b>Долги</b>\n")
+		for _, c := range debtCurs {
+			sb.WriteString(money.Format(debts[c], c) + "\n")
 		}
 	}
 
-	totals := map[string]int64{}
-	for _, a := range accs {
-		totals[a.Currency] += a.Balance
+	foreign := slices.ContainsFunc(append(slices.Clone(ownCurs), debtCurs...), func(c string) bool { return c != base })
+	if foreign || hasDebts {
+		ownSum, ownMissing, ownConverted := b.sumIn(r.ctx, own, ownCurs, base)
+		debtSum, debtMissing, debtConverted := b.sumIn(r.ctx, debts, debtCurs, base)
+		for i, m := range debtMissing {
+			debtMissing[i] = "долг " + m
+		}
+		missing := append(ownMissing, debtMissing...)
+		converted := ownConverted || debtConverted
+		approx := ""
+		if foreign {
+			approx = "≈ "
+		}
+		switch {
+		case !converted:
+			sb.WriteString("\n<i>Курсы валют сейчас недоступны — общий итог не посчитан.</i>")
+		default:
+			fmt.Fprintf(&sb, "\n💰 Всего %s<b>%s</b>\n", approx, money.Format(ownSum, base))
+			if hasDebts {
+				fmt.Fprintf(&sb, "💰 За вычетом долгов %s<b>%s</b>\n", approx, money.Format(ownSum-debtSum, base))
+			}
+			if len(missing) > 0 {
+				sb.WriteString("<i>без учёта (нет курса): " + strings.Join(missing, ", ") + "</i>\n")
+			}
+		}
+		if upd := b.rates.Updated(); !upd.IsZero() && converted && foreign {
+			sb.WriteString("<i>Курс на " + upd.In(b.cfg.Location).Format("02.01 15:04") + "</i>")
+		}
 	}
+
+	r.toast = "Обновлено"
+	b.show(r, strings.TrimRight(sb.String(), "\n"), kb(row(btn("🔄 Обновить", "bal"), btn("🏦 Счета", "a:l"))))
+}
+
+// sortCurrencies returns the currencies of totals with the base currency first.
+func sortCurrencies(totals map[string]int64, base string) []string {
 	curs := make([]string, 0, len(totals))
 	for c := range totals {
 		curs = append(curs, c)
@@ -73,43 +147,53 @@ func (b *Bot) showBalance(r *req) {
 		}
 		return cmp.Compare(a, c)
 	})
+	return curs
+}
 
-	if len(accs) > 1 {
-		sb.WriteString("\n<b>По валютам</b>\n")
-		for _, c := range curs {
-			sb.WriteString(money.Format(totals[c], c) + "\n")
+// sumIn converts per-currency totals into base; missing lists the amounts without a rate.
+func (b *Bot) sumIn(ctx context.Context, totals map[string]int64, curs []string, base string) (sum int64, missing []string, converted bool) {
+	for _, c := range curs {
+		if v, ok := b.rates.Convert(ctx, totals[c], c, base); ok {
+			sum += v
+			converted = true
+		} else {
+			missing = append(missing, money.Format(totals[c], c))
 		}
 	}
+	return sum, missing, converted
+}
 
-	if len(curs) > 1 || curs[0] != base {
-		var sum int64
-		var missing []string
-		converted := false
-		for _, c := range curs {
-			if v, ok := b.rates.Convert(r.ctx, totals[c], c, base); ok {
-				sum += v
-				converted = true
-			} else {
-				missing = append(missing, money.Format(totals[c], c))
-			}
-		}
-		if converted && (len(missing) < len(curs)) {
-			fmt.Fprintf(&sb, "\n💰 Всего ≈ <b>%s</b>\n", money.Format(sum, base))
-		}
-		if len(missing) > 0 {
-			if !converted || len(missing) == len(curs) {
-				sb.WriteString("\n<i>Курсы валют сейчас недоступны — общий итог не посчитан.</i>")
-			} else {
-				sb.WriteString("<i>без учёта (нет курса): " + strings.Join(missing, ", ") + "</i>\n")
-			}
-		}
-		if upd := b.rates.Updated(); !upd.IsZero() && converted {
-			sb.WriteString("<i>Курс на " + upd.In(b.cfg.Location).Format("02.01 15:04") + "</i>")
-		}
+// upcomingPayments lists the next payments on credit cards and loans that have a debt.
+func upcomingPayments(accs []accView, now time.Time) string {
+	type payment struct {
+		date time.Time
+		line string
 	}
-
-	r.toast = "Обновлено"
-	b.show(r, strings.TrimRight(sb.String(), "\n"), kb(row(btn("🔄 Обновить", "bal"), btn("🏦 Счета", "a:l"))))
+	var list []payment
+	for _, a := range accs {
+		if !a.Kind.IsDebt() || a.Balance >= 0 {
+			continue
+		}
+		date, ok := a.NextPayment(now)
+		if !ok {
+			continue
+		}
+		line := paymentDate(date, now) + " — " + esc(a.Name)
+		if a.PaymentAmount > 0 {
+			line += " · <b>" + money.Format(min(a.PaymentAmount, -a.Balance), a.Currency) + "</b>"
+		}
+		list = append(list, payment{date, line})
+	}
+	if len(list) == 0 {
+		return ""
+	}
+	slices.SortStableFunc(list, func(a, b payment) int { return a.date.Compare(b.date) })
+	var sb strings.Builder
+	sb.WriteString("\n📅 <b>Ближайшие платежи</b>\n")
+	for _, p := range list {
+		sb.WriteString(p.line + "\n")
+	}
+	return sb.String()
 }
 
 // --- history ---

@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -557,5 +558,104 @@ func TestOpenRejectsNewerSchemaAndBadPath(t *testing.T) {
 	}
 	if _, err := Open(filepath.Join(t.TempDir(), "a?b.db")); err == nil {
 		t.Error("expected error for path with '?'")
+	}
+}
+
+func TestNextPayment(t *testing.T) {
+	day := func(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 0, 0, 0, 0, time.UTC) }
+	cases := []struct {
+		payDay int
+		now    time.Time
+		want   time.Time
+	}{
+		{15, time.Date(2026, 10, 10, 18, 0, 0, 0, time.UTC), day(2026, 10, 15)},
+		{15, time.Date(2026, 10, 15, 23, 0, 0, 0, time.UTC), day(2026, 10, 15)}, // today
+		{15, day(2026, 10, 16), day(2026, 11, 15)},
+		{31, day(2026, 11, 5), day(2026, 11, 30)},  // short month
+		{30, day(2027, 2, 1), day(2027, 2, 28)},    // February
+		{31, day(2026, 10, 31), day(2026, 10, 31)}, // last day itself
+		{5, day(2026, 12, 20), day(2027, 1, 5)},    // year rollover
+		{31, day(2027, 1, 31), day(2027, 1, 31)},
+		{29, day(2027, 1, 30), day(2027, 2, 28)},
+	}
+	for _, c := range cases {
+		a := &Account{PaymentDay: c.payDay}
+		got, ok := a.NextPayment(c.now)
+		if !ok || !got.Equal(c.want) {
+			t.Errorf("day %d at %v: got %v %v, want %v", c.payDay, c.now, got, ok, c.want)
+		}
+	}
+	for _, d := range []int{0, -1, 32} {
+		if _, ok := (&Account{PaymentDay: d}).NextPayment(t0); ok {
+			t.Errorf("day %d must not have a payment", d)
+		}
+	}
+}
+
+func TestAvailable(t *testing.T) {
+	a := &Account{Kind: KindCredit, CreditLimit: 100000}
+	if v, ok := a.Available(-30000); !ok || v != 70000 {
+		t.Errorf("available = %d %v", v, ok)
+	}
+	if _, ok := (&Account{Kind: KindCredit}).Available(-30000); ok {
+		t.Error("no limit must mean no available amount")
+	}
+	if !KindCredit.IsDebt() || !KindLoan.IsDebt() || KindBank.IsDebt() || KindCash.IsDebt() {
+		t.Error("IsDebt")
+	}
+}
+
+func TestCreditFieldsPersist(t *testing.T) {
+	s, p := openTemp(t)
+	var id int64
+	_ = s.Update(1, func(u *User) error {
+		a := u.AddAccount("Кредитка", KindCredit, "RUB", t0)
+		a.CreditLimit, a.PaymentAmount, a.PaymentDay = 10000000, 300000, 25
+		id = a.ID
+		return nil
+	})
+	s2 := reopen(t, s, p)
+	s2.View(1, func(u *User) {
+		a := u.Account(id)
+		if a == nil || a.Kind != KindCredit || a.CreditLimit != 10000000 || a.PaymentAmount != 300000 || a.PaymentDay != 25 {
+			t.Errorf("account = %+v", a)
+		}
+	})
+}
+
+func TestMigrateFromV1KeepsData(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "data.db")
+	db, err := sql.Open("sqlite", "file:"+p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		migrations[0],
+		`PRAGMA user_version = 1`,
+		`INSERT INTO users (id, base_currency) VALUES (1, 'RUB')`,
+		`INSERT INTO accounts (user_id, id, name, kind, currency, created_at) VALUES (1, 1, 'Карта', 'bank', 'RUB', '` + t0.Format(timeLayout) + `')`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	var v int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&v); err != nil || v != schemaVersion {
+		t.Fatalf("user_version = %d (%v), want %d", v, err, schemaVersion)
+	}
+	s.View(1, func(u *User) {
+		if len(u.Accounts) != 1 || u.Accounts[0].Name != "Карта" || u.Accounts[0].PaymentDay != 0 {
+			t.Errorf("accounts = %+v", u.Accounts)
+		}
+	})
+	if err := s.Update(1, func(u *User) error { u.Accounts[0].PaymentDay = 3; return nil }); err != nil {
+		t.Fatal(err)
 	}
 }
