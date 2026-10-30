@@ -14,16 +14,16 @@ import (
 	"financer/internal/tg"
 )
 
-// draft — операция, которую пользователь сейчас заполняет.
+// draft is the transaction the user is currently filling in.
 type draft struct {
 	typ         storage.TxType
 	accountID   int64
 	toAccountID int64
 	amount      int64
 	toAmount    int64
-	estimate    int64 // сумма зачисления по курсу, показанная на кнопке
+	estimate    int64 // credited amount at the current rate, shown on the button
 	note        string
-	msgID       int // сообщение с кнопками этого черновика
+	msgID       int // message holding this draft's buttons
 }
 
 const maxNote = 200
@@ -33,7 +33,7 @@ func (b *Bot) needAccount(r *req) {
 		kb(row(btn("➕ Добавить счёт", "a:new"))))
 }
 
-// --- расход / доход ---
+// --- expense / income ---
 
 func (b *Bot) startEntry(r *req, typ storage.TxType) {
 	s := b.sess(r.uid)
@@ -59,7 +59,7 @@ func (b *Bot) startEntry(r *req, typ storage.TxType) {
 		title, accLabel(&acc), example), kb(row(btn("❌ Отмена", "x"))))
 }
 
-// quickEntry — ввод вида «350 кофе» без нажатия кнопок.
+// quickEntry handles input like "350 coffee" without pressing any buttons.
 func (b *Bot) quickEntry(r *req, s *session, text string) {
 	in, err := money.ParseInput(text)
 	if err != nil {
@@ -100,7 +100,7 @@ func (b *Bot) inputAmount(r *req, s *session, text string) {
 	b.fillDraft(r, s, in)
 }
 
-// fillDraft подбирает счёт по валюте и показывает выбор категории.
+// fillDraft picks an account by currency and shows the category picker.
 func (b *Bot) fillDraft(r *req, s *session, in money.Input) {
 	d := s.draft
 	var acc storage.Account
@@ -228,7 +228,7 @@ func (b *Bot) inputNote(r *req, s *session, text string) {
 	}
 	d.note = truncate(strings.Join(strings.Fields(text), " "), maxNote)
 	s.cancelInput()
-	// Пересылаем черновик вниз, чтобы он оказался под сообщением пользователя.
+	// Re-send the draft so it ends up below the user's message.
 	if id := b.sendScreen(r, b.renderDraft(r.uid, d, "")); id != 0 {
 		_ = b.api.DeleteMessage(r.ctx, r.chatID, d.msgID)
 		d.msgID = id
@@ -305,7 +305,7 @@ func (b *Bot) undo(r *req, txID int64) {
 	b.show(r, text, nil)
 }
 
-// --- перевод ---
+// --- transfer ---
 
 func (b *Bot) startTransfer(r *req) {
 	s := b.sess(r.uid)
@@ -321,7 +321,7 @@ func (b *Bot) startTransfer(r *req) {
 	s.draft.msgID = b.sendScreen(r, b.renderTransferPick(r.uid, s.draft))
 }
 
-// renderTransferPick показывает выбор счёта «откуда» или «куда».
+// renderTransferPick shows the "from" or "to" account picker.
 func (b *Bot) renderTransferPick(uid int64, d *draft) screen {
 	k := kb()
 	var text string
@@ -490,8 +490,8 @@ func (b *Bot) saveTransfer(r *req, s *session) {
 	b.show(r, text, undoKB(txID))
 }
 
-// catHash — короткий отпечаток названия категории для callback-кнопок: защищает от
-// срабатывания устаревшей кнопки, если список категорий успел измениться.
+// catHash is a short fingerprint of a category name for callback buttons: it keeps a
+// stale button from firing if the category list has changed in the meantime.
 func catHash(name string) string {
 	h := fnv.New32a()
 	h.Write([]byte(name))

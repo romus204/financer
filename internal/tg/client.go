@@ -1,4 +1,4 @@
-// Package tg — минимальный клиент Telegram Bot API на стандартной библиотеке.
+// Package tg is a minimal Telegram Bot API client built on the standard library.
 package tg
 
 import (
@@ -25,16 +25,16 @@ type Client struct {
 
 func New(token string) *Client { return NewWithURL(token, apiBase) }
 
-// NewWithURL позволяет указать свой адрес Bot API (локальный сервер или тестовый стаб).
+// NewWithURL lets you set a custom Bot API address (a local server or a test stub).
 func NewWithURL(token, apiURL string) *Client {
 	return &Client{
 		base: apiURL + token + "/",
-		// Таймаут больше, чем long polling в getUpdates.
+		// The timeout is longer than the getUpdates long polling.
 		http: &http.Client{Timeout: 75 * time.Second},
 	}
 }
 
-// APIError — ошибка, которую вернул Telegram.
+// APIError is an error returned by Telegram.
 type APIError struct {
 	Method      string
 	Code        int
@@ -63,7 +63,7 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+method, bytes.NewReader(body))
 	if err != nil {
-		// Не оборачиваем исходную ошибку: в ней может быть URL с токеном.
+		// Don't wrap the original error: it may contain the URL with the token.
 		return fmt.Errorf("telegram %s: не удалось создать запрос", method)
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -73,7 +73,7 @@ func (c *Client) call(ctx context.Context, method string, params, out any) error
 func (c *Client) do(method string, req *http.Request, out any) error {
 	resp, err := c.http.Do(req)
 	if err != nil {
-		// url.Error содержит полный URL вместе с токеном бота — убираем его из ошибки.
+		// url.Error contains the full URL including the bot token — strip it from the error.
 		var ue *url.Error
 		if errors.As(err, &ue) {
 			err = ue.Err
@@ -109,7 +109,7 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, timeout int) ([]U
 	return updates, err
 }
 
-// SendMessage отправляет HTML-сообщение. markup — *InlineKeyboard, *ReplyKeyboard или nil.
+// SendMessage sends an HTML message. markup is *InlineKeyboard, *ReplyKeyboard or nil.
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, markup any) (*Message, error) {
 	p := textParams(text)
 	p["chat_id"] = chatID
@@ -123,7 +123,7 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, mar
 	return &m, nil
 }
 
-// EditMessageText меняет текст и inline-клавиатуру. kb == nil убирает клавиатуру.
+// EditMessageText changes the text and inline keyboard. kb == nil removes the keyboard.
 func (c *Client) EditMessageText(ctx context.Context, chatID int64, msgID int, text string, kb *InlineKeyboard) error {
 	p := textParams(text)
 	p["chat_id"] = chatID

@@ -17,7 +17,7 @@ import (
 
 const (
 	maxCategory   = 30
-	maxCategories = 40 // больше кнопок Telegram не покажет в одной клавиатуре
+	maxCategories = 40 // Telegram won't show more buttons in a single keyboard
 )
 
 func (b *Bot) showSettings(r *req) {
@@ -162,7 +162,7 @@ func (b *Bot) inputCategory(r *req, s *session, text string) {
 
 func (b *Bot) exportCSV(r *req) {
 	var buf bytes.Buffer
-	buf.WriteString("\uFEFF") // BOM, чтобы Excel открыл UTF-8 корректно
+	buf.WriteString("\uFEFF") // BOM so that Excel opens UTF-8 correctly
 	w := csv.NewWriter(&buf)
 	w.Comma = ';'
 	n := 0
@@ -212,7 +212,7 @@ func (b *Bot) exportCSV(r *req) {
 	r.toast = "Файл отправлен"
 }
 
-// safeCell защищает от CSV-инъекций формул при открытии в Excel.
+// safeCell guards against CSV formula injection when opened in Excel.
 func safeCell(s string) string {
 	if s != "" && strings.ContainsRune("=+-@\t\r", rune(s[0])) {
 		return "'" + s

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
-	_ "time/tzdata" // часовые пояса без зависимости от системы
+	_ "time/tzdata" // embedded time zones, independent of the system
 
 	"financer/internal/bot"
 	"financer/internal/rates"
@@ -69,7 +69,7 @@ func run() error {
 	}
 	defer store.Close()
 
-	// Перенос данных из прежней JSON-версии бота (однократно, только в пустую базу).
+	// Migrate data from the legacy JSON version of the bot (once, only into an empty database).
 	legacy := os.Getenv("LEGACY_JSON")
 	if legacy == "" {
 		legacy = filepath.Join(filepath.Dir(dataFile), "financer.json")
@@ -103,7 +103,7 @@ func parseIDs(s string) (map[int64]bool, error) {
 	return ids, nil
 }
 
-// loadDotEnv читает KEY=VALUE из файла, не перезаписывая уже заданные переменные окружения.
+// loadDotEnv reads KEY=VALUE pairs from a file without overriding already set environment variables.
 func loadDotEnv(path string) error {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {

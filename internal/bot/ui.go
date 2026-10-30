@@ -45,7 +45,7 @@ var monthNames = [...]string{"Январь", "Февраль", "Март", "Ап
 var monthGenitive = [...]string{"января", "февраля", "марта", "апреля", "мая", "июня",
 	"июля", "августа", "сентября", "октября", "ноября", "декабря"}
 
-// --- отправка ---
+// --- sending ---
 
 func (b *Bot) send(r *req, text string, k *tg.InlineKeyboard) int {
 	var markup any
@@ -60,14 +60,14 @@ func (b *Bot) send(r *req, text string, k *tg.InlineKeyboard) int {
 	return m.MessageID
 }
 
-// sendMenu отправляет сообщение с главным меню (reply-клавиатурой).
+// sendMenu sends a message with the main menu (reply keyboard).
 func (b *Bot) sendMenu(r *req, text string) {
 	if _, err := b.api.SendMessage(r.ctx, r.chatID, text, mainKeyboard); err != nil {
 		slog.Error("sendMessage", "err", err)
 	}
 }
 
-// show редактирует текущее сообщение (если пришли из кнопки) или отправляет новое.
+// show edits the current message (when triggered by a button) or sends a new one.
 func (b *Bot) show(r *req, text string, k *tg.InlineKeyboard) int {
 	if r.msgID != 0 {
 		err := b.api.EditMessageText(r.ctx, r.chatID, r.msgID, text, k)
@@ -94,7 +94,7 @@ func (b *Bot) stale(r *req) {
 	b.show(r, "⌛ "+string(errStale), nil)
 }
 
-// --- клавиатуры ---
+// --- keyboards ---
 
 func btn(text, data string) tg.InlineButton {
 	return tg.InlineButton{Text: text, CallbackData: data}
@@ -135,7 +135,7 @@ func currencyLabel(code string) string {
 	return code
 }
 
-// --- форматирование ---
+// --- formatting ---
 
 func esc(s string) string { return html.EscapeString(s) }
 
@@ -159,7 +159,7 @@ func accButtonLabel(a *storage.Account, balance int64) string {
 	return kindIcon(a.Kind) + " " + a.Name + " · " + money.Format(balance, a.Currency)
 }
 
-// accRef — подпись счёта для операции (счёт мог быть архивирован).
+// accRef is the account label for a transaction (the account may have been archived).
 func accRef(u *storage.User, id int64) (label, currency string) {
 	if a := u.Account(id); a != nil {
 		return accLabel(a), a.Currency
@@ -167,7 +167,7 @@ func accRef(u *storage.User, id int64) (label, currency string) {
 	return "❓ удалённый счёт", "???"
 }
 
-// cleanText схлопывает пробелы и проверяет длину.
+// cleanText collapses whitespace and checks the length.
 func cleanText(s string, maxRunes int) (string, bool) {
 	s = strings.Join(strings.Fields(s), " ")
 	n := utf8.RuneCountInString(s)
@@ -196,7 +196,7 @@ func dayTitle(t, now time.Time) string {
 	}
 }
 
-// describeTx — подробное описание операции.
+// describeTx returns a detailed description of a transaction.
 func describeTx(u *storage.User, t *storage.Transaction) string {
 	var sb strings.Builder
 	from, cur := accRef(u, t.AccountID)
@@ -223,7 +223,7 @@ func describeTx(u *storage.User, t *storage.Transaction) string {
 	return sb.String()
 }
 
-// exchangeRate показывает курс в «естественном» направлении: 1 USD = 95,5 ₽.
+// exchangeRate shows the rate in its "natural" direction: 1 USD = 95,5 ₽.
 func exchangeRate(a int64, aCur string, b int64, bCur string) string {
 	if a < b {
 		a, aCur, b, bCur = b, bCur, a, aCur
@@ -245,7 +245,7 @@ func catLabel(c string) string {
 	return esc(c)
 }
 
-// txLine — однострочное описание для истории.
+// txLine is a one-line description for the history view.
 func txLine(u *storage.User, t *storage.Transaction, loc *time.Location) string {
 	tm := t.CreatedAt.In(loc).Format("15:04")
 	from, cur := accRef(u, t.AccountID)
@@ -270,7 +270,7 @@ func txLine(u *storage.User, t *storage.Transaction, loc *time.Location) string 
 	return s
 }
 
-// balancesOf — строки «счёт: остаток» для затронутых операцией счетов.
+// balancesOf returns "account: balance" lines for the accounts affected by a transaction.
 func balancesOf(u *storage.User, ids ...int64) string {
 	bal := u.Balances()
 	var lines []string
@@ -282,7 +282,7 @@ func balancesOf(u *storage.User, ids ...int64) string {
 	return strings.Join(lines, "\n")
 }
 
-// screen — текст сообщения вместе с его inline-клавиатурой.
+// screen is a message text together with its inline keyboard.
 type screen struct {
 	text string
 	kb   *tg.InlineKeyboard

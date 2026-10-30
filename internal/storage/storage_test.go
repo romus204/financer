@@ -462,7 +462,7 @@ func TestImportJSON(t *testing.T) {
 	if err != nil || n != 1 {
 		t.Fatalf("import = %d, %v", n, err)
 	}
-	// Повторный импорт в непустую базу ничего не делает.
+	// A repeated import into a non-empty database does nothing.
 	if n, err := s.ImportJSON(jsonPath); err != nil || n != 0 {
 		t.Fatalf("second import = %d, %v", n, err)
 	}

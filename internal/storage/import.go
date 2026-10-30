@@ -11,8 +11,8 @@ import (
 	"slices"
 )
 
-// ImportJSON переносит данные из прежнего JSON-хранилища. Импорт выполняется
-// одной транзакцией и только в пустую базу; возвращает число перенесённых пользователей.
+// ImportJSON migrates data from the legacy JSON storage. The import runs in a single
+// transaction and only into an empty database; it returns the number of users migrated.
 func (s *Store) ImportJSON(path string) (int, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -63,8 +63,8 @@ func (s *Store) ImportJSON(path string) (int, error) {
 	return len(imported), nil
 }
 
-// normalize чинит данные старого формата: NextID должен быть больше всех ID,
-// а отсутствующие категории заменяются стандартными.
+// normalize fixes legacy-format data: NextID must be greater than all IDs,
+// and missing categories are replaced with the defaults.
 func normalize(u *User) {
 	if u.BaseCurrency == "" {
 		u.BaseCurrency = "RUB"

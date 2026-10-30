@@ -1,4 +1,4 @@
-// Package bot — диалоговая логика Telegram-бота учёта финансов.
+// Package bot implements the conversation logic of the finance-tracking Telegram bot.
 package bot
 
 import (
@@ -35,17 +35,17 @@ func New(api *tg.Client, store *storage.Store, rates *rates.Service, cfg Config)
 	return &Bot{api: api, store: store, rates: rates, cfg: cfg, sessions: map[int64]*session{}}
 }
 
-// step — чего бот ждёт от пользователя текстом.
+// step is the text input the bot is waiting for from the user.
 type step int
 
 const (
 	stepIdle        step = iota
-	stepAmount           // сумма операции
-	stepTransferTo       // сумма зачисления при переводе между валютами
-	stepNote             // комментарий к черновику
-	stepAccCurrency      // код валюты нового счёта
-	stepAccName          // название нового счёта
-	stepAccBalance       // начальный баланс нового счёта
+	stepAmount           // transaction amount
+	stepTransferTo       // amount credited in a cross-currency transfer
+	stepNote             // note for the draft
+	stepAccCurrency      // currency code of a new account
+	stepAccName          // name of a new account
+	stepAccBalance       // opening balance of a new account
 	stepAccRename
 	stepAccAdjust
 	stepCatAdd
@@ -61,19 +61,19 @@ type session struct {
 
 func (s *session) reset() { *s = session{} }
 
-// cancelInput прекращает ожидание текста, не трогая черновик операции.
+// cancelInput stops waiting for text input without touching the transaction draft.
 func (s *session) cancelInput() { s.step = stepIdle }
 
-// req — контекст обработки одного обновления.
+// req is the context for handling a single update.
 type req struct {
 	ctx    context.Context
 	uid    int64
 	chatID int64
-	msgID  int    // сообщение, которое можно отредактировать; 0 — отправлять новое
-	toast  string // всплывающий ответ на нажатие кнопки
+	msgID  int    // message that may be edited; 0 means send a new one
+	toast  string // popup answer to a button press
 }
 
-// userError — ошибка, текст которой можно показать пользователю.
+// userError is an error whose text can be shown to the user.
 type userError string
 
 func (e userError) Error() string { return string(e) }
@@ -146,7 +146,7 @@ func (b *Bot) sess(uid int64) *session {
 }
 
 func (b *Bot) onMessage(ctx context.Context, m *tg.Message) {
-	// Финансы — личное: работаем только в личных чатах.
+	// Finances are personal: only private chats are served.
 	if m.From == nil || m.Chat.Type != "private" {
 		return
 	}
@@ -252,7 +252,7 @@ func (b *Bot) onCallback(ctx context.Context, q *tg.CallbackQuery) {
 	p := strings.Split(q.Data, ":")
 	switch p[0] {
 	case "x":
-		// Старая кнопка «Отмена» не должна сбрасывать новый черновик.
+		// A stale "Cancel" button must not discard a newer draft.
 		if s.draft == nil || s.draft.msgID == 0 || s.draft.msgID == r.msgID {
 			s.reset()
 		}

@@ -14,7 +14,7 @@ import (
 	"financer/internal/tg"
 )
 
-// --- баланс ---
+// --- balance ---
 
 type accView struct {
 	storage.Account
@@ -112,7 +112,7 @@ func (b *Bot) showBalance(r *req) {
 	b.show(r, strings.TrimRight(sb.String(), "\n"), kb(row(btn("🔄 Обновить", "bal"), btn("🏦 Счета", "a:l"))))
 }
 
-// --- история ---
+// --- history ---
 
 const historyPage = 10
 
@@ -204,7 +204,7 @@ func (b *Bot) deleteTx(r *req, id int64, offset int, accID int64) {
 	b.showHistory(r, offset, accID)
 }
 
-// --- отчёт за месяц ---
+// --- monthly report ---
 
 type reportItem struct {
 	typ      storage.TxType

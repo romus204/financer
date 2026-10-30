@@ -5,14 +5,14 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-# SQLite-драйвер на чистом Go, поэтому CGO не нужен и бинарник статический.
+# The SQLite driver is pure Go, so CGO is not needed and the binary is static.
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/financer . \
  && mkdir -p /out/data
 
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/financer /app/financer
-# Каталог данных принадлежит пользователю nonroot (65532), иначе том будет недоступен для записи.
+# The data directory is owned by the nonroot user (65532); otherwise the volume would not be writable.
 COPY --from=build --chown=65532:65532 /out/data /data
 ENV DATA_FILE=/data/financer.db
 VOLUME ["/data"]

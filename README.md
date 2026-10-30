@@ -1,29 +1,33 @@
-# Financer — Telegram-бот учёта финансов
+# Financer — personal finance Telegram bot
 
-Личный бот для учёта денег на картах, банковских счетах и в наличных — в любых валютах.
-Написан на Go; единственная внешняя зависимость — драйвер SQLite [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) (чистый Go, без CGO).
+**English** | [Русский](README.ru.md)
 
-## Возможности
+A personal bot for tracking money on cards, bank accounts and in cash — in any currency.
+Written in Go; the only external dependency is the SQLite driver [`modernc.org/sqlite`](https://pkg.go.dev/modernc.org/sqlite) (pure Go, no CGO).
 
-- **Счета двух типов**: 💳 карта / банковский счёт и 💵 наличные, каждый в своей валюте (RUB, USD, EUR, KZT, … или любой код, например `USDT`).
-- **Быстрый ввод одним сообщением**:
-  - `350 кофе` — расход с основного счёта;
-  - `+50000 зарплата` — доход;
-  - `20$ такси`, `15 eur обед`, `5000 тг` — счёт подбирается по валюте.
+> The bot's interface is in Russian.
 
-  После ввода бот показывает кнопки категорий, на этом же экране можно сменить счёт и добавить комментарий.
-- **Переводы** между своими счетами: снятие наличных, пополнение карты, обмен валюты. Если валюты разные, бот спросит, сколько пришло, и подскажет сумму по текущему курсу.
-- **Баланс**: остатки по каждому счёту, итоги по валютам и общий итог в основной валюте по актуальному курсу.
-- **История** с постраничным просмотром, общая или по одному счёту; любую операцию можно открыть и удалить.
-- **Отчёт за месяц**: доходы, расходы и разбивка по категориям с процентами.
-- **Корректировка баланса**: вводите фактический остаток, разница записывается отдельной операцией.
-- **↩️ Отмена** сразу после каждой записи.
-- **Настройки**: основная валюта, свои категории расходов и доходов, экспорт в CSV (открывается в Excel).
+## Features
 
-## Запуск
+- **Two account types**: 💳 card / bank account and 💵 cash, each in its own currency (RUB, USD, EUR, KZT, … or any code, e.g. `USDT`).
+- **Quick entry in a single message**:
+  - `350 кофе` — an expense from the main account;
+  - `+50000 зарплата` — income;
+  - `20$ такси`, `15 eur обед`, `5000 тг` — the account is picked by currency.
 
-1. Создайте бота у [@BotFather](https://t.me/BotFather) и получите токен.
-2. Скопируйте `.env.example` в `.env` и заполните:
+  After the input the bot shows category buttons; on the same screen you can switch the account and add a note.
+- **Transfers** between your own accounts: cash withdrawals, card top-ups, currency exchange. If the currencies differ, the bot asks how much was received and suggests the amount at the current rate.
+- **Balance**: per-account balances, totals per currency and a grand total in the main currency at the current rate.
+- **History** with pagination, overall or per account; any transaction can be opened and deleted.
+- **Monthly report**: income, expenses and a per-category breakdown with percentages.
+- **Balance adjustment**: enter the actual balance and the difference is recorded as a separate transaction.
+- **↩️ Undo** right after every entry.
+- **Settings**: main currency, custom expense and income categories, CSV export (opens in Excel).
+
+## Getting started
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and get a token.
+2. Copy `.env.example` to `.env` and fill it in:
 
    ```env
    TELEGRAM_TOKEN=123456:ABC...
@@ -31,11 +35,11 @@
    TIMEZONE=Europe/Moscow
    ```
 
-   Свой Telegram ID можно узнать, написав боту без доступа: он ответит вашим ID.
-3. Соберите и запустите:
+   To find your Telegram ID, message the bot without access: it will reply with your ID.
+3. Build and run:
 
    ```sh
-   go mod tidy        # подтянет драйвер SQLite
+   go mod tidy        # fetches the SQLite driver
    go build -o financer .
    ./financer
    ```
@@ -43,55 +47,55 @@
 ### Docker
 
 ```sh
-go mod tidy                     # один раз: нужен go.sum для сборки образа
+go mod tidy                     # once: go.sum is required to build the image
 docker compose up -d --build
 docker compose logs -f
 ```
 
-Образ собирается в статический бинарник поверх `distroless/static` и запускается не от root. Данные лежат в томе `financer-data` (`/data/financer.db`).
-Резервная копия: `docker compose exec financer` не подойдёт (в образе нет shell), поэтому копируйте файл тома, остановив контейнер, или используйте `sqlite3 financer.db ".backup backup.db"` на хосте.
+The image builds a static binary on top of `distroless/static` and runs as non-root. Data lives in the `financer-data` volume (`/data/financer.db`).
+Backups: `docker compose exec financer` won't work (the image has no shell), so copy the volume file with the container stopped, or run `sqlite3 financer.db ".backup backup.db"` on the host.
 
-### Сервер с systemd
+### systemd server
 
 ```sh
-./deploy/deploy.sh                 # хост берётся из $DEPLOY_HOST или первого аргумента
-./deploy/deploy.sh myserver --env  # другой хост; --env — перезалить локальный .env
+./deploy/deploy.sh                 # host is taken from $DEPLOY_HOST or the first argument
+./deploy/deploy.sh myserver --env  # another host; --env re-uploads the local .env
 ```
 
-Скрипт работает и на чистом сервере, и для обновления. Он сам:
-- создаёт пользователя `financer`;
-- создаёт каталоги `/opt/financer` и `/opt/financer/data`;
-- кладёт `.env` при первом развёртывании;
-- делает резервную копию базы перед обновлением (хранятся последние 10);
-- устанавливает unit systemd и проверяет, что сервис запустился.
+The script works both on a fresh server and for updates. It:
+- creates the `financer` user;
+- creates the `/opt/financer` and `/opt/financer/data` directories;
+- uploads `.env` on the first deploy;
+- backs up the database before updating (the last 10 backups are kept);
+- installs the systemd unit and checks that the service has started.
 
-На сервере нужен root или `sudo` без пароля.
+Requires root or passwordless `sudo` on the server.
 
-Переменные окружения имеют приоритет над `.env`.
+Environment variables take precedence over `.env`.
 
-| Переменная         | По умолчанию                            | Описание                                     |
+| Variable           | Default                                 | Description                                  |
 |--------------------|-----------------------------------------|----------------------------------------------|
-| `TELEGRAM_TOKEN`   | —                                       | Токен бота (обязательно)                     |
-| `ALLOWED_USER_IDS` | —                                       | ID пользователей с доступом, через запятую   |
-| `DATA_FILE`        | `data/financer.db`                      | База SQLite                                  |
-| `LEGACY_JSON`      | `<каталог DATA_FILE>/financer.json`     | JSON прежней версии для однократного импорта |
-| `TIMEZONE`         | системный                               | Часовой пояс для дат и отчётов               |
-| `RATES_URL`        | `https://open.er-api.com/v6/latest/USD` | Источник курсов; `off` отключает пересчёт    |
+| `TELEGRAM_TOKEN`   | —                                       | Bot token (required)                         |
+| `ALLOWED_USER_IDS` | —                                       | Comma-separated IDs of allowed users         |
+| `DATA_FILE`        | `data/financer.db`                      | SQLite database                              |
+| `LEGACY_JSON`      | `<DATA_FILE dir>/financer.json`         | Legacy JSON file for a one-time import       |
+| `TIMEZONE`         | system                                  | Time zone for dates and reports              |
+| `RATES_URL`        | `https://open.er-api.com/v6/latest/USD` | Exchange rate source; `off` disables conversion |
 
-## Устройство
+## Architecture
 
 ```
-main.go               конфигурация и запуск
-internal/tg           минимальный клиент Telegram Bot API (long polling)
-internal/bot          диалоги, меню, экраны
-internal/storage      модель данных и хранилище SQLite
-internal/money        разбор и форматирование сумм и валют
-internal/rates        курсы валют с кэшированием
+main.go               configuration and startup
+internal/tg           minimal Telegram Bot API client (long polling)
+internal/bot          dialogs, menus, screens
+internal/storage      data model and SQLite storage
+internal/money        parsing and formatting of amounts and currencies
+internal/rates        cached exchange rates
 ```
 
-- Суммы хранятся целыми числами в сотых долях, без float.
-- Балансы не хранятся, а считаются по операциям. Поэтому удаление или отмена операции всегда даёт корректный остаток.
-- Данные хранятся в SQLite (режим WAL). Каждое изменение записывается одной транзакцией, а при ошибке записи состояние в памяти перечитывается из базы. Файл базы создаётся с правами `0600`, каталог — `0700`.
-- Если рядом с базой лежит `financer.json` от прежней версии, при первом запуске данные переносятся в пустую базу, а файл переименовывается в `financer.json.imported`.
-- Бот работает только в личных чатах и только для пользователей из `ALLOWED_USER_IDS`. У каждого пользователя свои данные.
-- Курсы берутся только для пересчёта итогов и подсказки при обмене. Во внешний сервис уходит только запрос списка курсов, без ваших данных.
+- Amounts are stored as integers in hundredths, no floats.
+- Balances are not stored but computed from transactions, so deleting or undoing a transaction always yields a correct balance.
+- Data is stored in SQLite (WAL mode). Every change is written in a single transaction, and if a write fails the in-memory state is reloaded from the database. The database file is created with `0600` permissions and its directory with `0700`.
+- If a `financer.json` from the legacy version sits next to the database, its data is migrated into the empty database on first start and the file is renamed to `financer.json.imported`.
+- The bot works only in private chats and only for users listed in `ALLOWED_USER_IDS`. Each user has their own data.
+- Exchange rates are used only for converting totals and for the exchange hint. Only the rate list request goes to the external service — none of your data.

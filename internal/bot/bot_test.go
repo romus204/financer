@@ -1212,7 +1212,7 @@ func TestCallbackAlwaysAnswered(t *testing.T) {
 	}
 }
 
-// catCB строит callback категории с отпечатком названия, как это делает бот.
+// catCB builds a category callback with the name fingerprint, the same way the bot does.
 func (h *harness) catCB(prefix string, typ storage.TxType, idx int) string {
 	cb := prefix + ":" + strconv.Itoa(idx)
 	h.user(func(u *storage.User) {

@@ -8,8 +8,8 @@ import (
 type AccountKind string
 
 const (
-	KindBank AccountKind = "bank" // карта или банковский счёт
-	KindCash AccountKind = "cash" // наличные
+	KindBank AccountKind = "bank" // card or bank account
+	KindCash AccountKind = "cash" // cash
 )
 
 type TxType string
@@ -18,7 +18,7 @@ const (
 	TxExpense  TxType = "expense"
 	TxIncome   TxType = "income"
 	TxTransfer TxType = "transfer"
-	TxAdjust   TxType = "adjust" // начальный остаток или корректировка; Amount со знаком
+	TxAdjust   TxType = "adjust" // opening balance or adjustment; Amount is signed
 )
 
 type Account struct {
@@ -30,8 +30,8 @@ type Account struct {
 	CreatedAt time.Time   `json:"created_at"`
 }
 
-// Transaction — операция. Суммы в сотых долях валюты соответствующего счёта.
-// Для перевода Amount списывается с AccountID, ToAmount зачисляется на ToAccountID.
+// Transaction is a single operation. Amounts are in hundredths of the account's currency.
+// For a transfer, Amount is debited from AccountID and ToAmount is credited to ToAccountID.
 type Transaction struct {
 	ID          int64     `json:"id"`
 	Type        TxType    `json:"type"`
@@ -44,8 +44,8 @@ type Transaction struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-// User — все данные одного пользователя. Балансы не хранятся, а считаются по операциям,
-// поэтому удаление любой операции автоматически корректирует остатки.
+// User holds all data of a single user. Balances are not stored but computed from
+// transactions, so deleting any transaction automatically corrects the balances.
 type User struct {
 	ID                int64          `json:"id"`
 	BaseCurrency      string         `json:"base_currency"`
@@ -86,7 +86,7 @@ func (u *User) nextID() int64 {
 	return id
 }
 
-// Categories возвращает категории для расходов или доходов.
+// Categories returns the expense or income categories.
 func (u *User) Categories(t TxType) []string {
 	if t == TxIncome {
 		return u.IncomeCategories
@@ -102,7 +102,7 @@ func (u *User) SetCategories(t TxType, cats []string) {
 	}
 }
 
-// Account ищет счёт, включая удалённые (архивные).
+// Account looks up an account, including deleted (archived) ones.
 func (u *User) Account(id int64) *Account {
 	for _, a := range u.Accounts {
 		if a.ID == id {
@@ -129,7 +129,7 @@ func (u *User) ActiveAccounts() []*Account {
 	return res
 }
 
-// DefaultAccount — основной счёт для быстрых операций.
+// DefaultAccount returns the main account for quick entries.
 func (u *User) DefaultAccount() *Account {
 	if a := u.ActiveAccount(u.DefaultAccountID); a != nil {
 		return a
@@ -140,7 +140,7 @@ func (u *User) DefaultAccount() *Account {
 	return nil
 }
 
-// AccountByCurrency подбирает счёт в нужной валюте, предпочитая основной.
+// AccountByCurrency picks an account in the given currency, preferring the main one.
 func (u *User) AccountByCurrency(cur string) *Account {
 	if d := u.DefaultAccount(); d != nil && d.Currency == cur {
 		return d
@@ -162,8 +162,8 @@ func (u *User) AddAccount(name string, kind AccountKind, currency string, now ti
 	return a
 }
 
-// RemoveAccount удаляет счёт. Если по нему есть операции, счёт архивируется,
-// чтобы история осталась читаемой.
+// RemoveAccount deletes an account. If it has transactions, the account is archived
+// instead so that the history stays readable.
 func (u *User) RemoveAccount(id int64) (archived bool) {
 	if u.HasTransactions(id) {
 		if a := u.Account(id); a != nil {
@@ -188,7 +188,7 @@ func (u *User) HasTransactions(accID int64) bool {
 	})
 }
 
-// Balances считает остатки всех счетов по операциям.
+// Balances computes the balances of all accounts from transactions.
 func (u *User) Balances() map[int64]int64 {
 	b := make(map[int64]int64, len(u.Accounts))
 	for _, t := range u.Transactions {

@@ -1,6 +1,6 @@
-// Package money — разбор и форматирование сумм и валют.
+// Package money parses and formats amounts and currencies.
 //
-// Все суммы хранятся как int64 в сотых долях (копейках, центах) — для любой валюты.
+// All amounts are stored as int64 in hundredths (kopecks, cents) — for any currency.
 package money
 
 import (
@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 )
 
-// MaxAmount — защита от переполнения и опечаток: 1 трлн.
+// MaxAmount guards against overflow and typos: 1 trillion.
 const MaxAmount int64 = 1_000_000_000_000 * 100
 
 var ErrInvalid = errors.New("некорректная сумма")
@@ -41,7 +41,7 @@ var aliases = map[string]string{
 	"бат": "THB", "батов": "THB", "дирхам": "AED", "дирхамов": "AED",
 }
 
-// known — коды, которые распознаются в быстром вводе («20 chf такси»).
+// known lists the codes recognized in quick input ("20 chf taxi").
 var known = map[string]bool{}
 
 func init() {
@@ -54,10 +54,10 @@ func init() {
 
 var codeRe = regexp.MustCompile(`^[A-Z][A-Z0-9]{1,5}$`)
 
-// ValidCode проверяет формат кода валюты (ISO 4217 или тикер, например USDT).
+// ValidCode checks the format of a currency code (ISO 4217 or a ticker such as USDT).
 func ValidCode(code string) bool { return codeRe.MatchString(code) }
 
-// Symbol возвращает символ валюты или сам код, если символа нет.
+// Symbol returns the currency symbol, or the code itself if there is none.
 func Symbol(code string) string {
 	if s, ok := symbols[code]; ok {
 		return s
@@ -65,7 +65,7 @@ func Symbol(code string) string {
 	return code
 }
 
-// ParseCurrency распознаёт валюту по коду, символу или слову («usd», «$», «руб»).
+// ParseCurrency recognizes a currency by code, symbol or word ("usd", "$", "руб").
 func ParseCurrency(token string) (string, bool) {
 	t := strings.ToLower(strings.TrimSpace(token))
 	t = strings.TrimSuffix(t, ".")
@@ -86,7 +86,7 @@ func ParseCurrency(token string) (string, bool) {
 	return "", false
 }
 
-// Parse разбирает сумму: «1500», «1 500,50», «1,234.56», «-200».
+// Parse parses an amount: "1500", "1 500,50", "1,234.56", "-200".
 func Parse(s string) (int64, error) {
 	s = strings.TrimSpace(s)
 	neg := false
@@ -143,19 +143,19 @@ func Parse(s string) (int64, error) {
 	return v, nil
 }
 
-// normalizeSeparators приводит разделители к виду «1234.56».
+// normalizeSeparators normalizes separators to the "1234.56" form.
 func normalizeSeparators(s string) string {
 	commas, dots := strings.Count(s, ","), strings.Count(s, ".")
 	switch {
 	case commas > 0 && dots > 0:
-		// Десятичный разделитель — тот, что стоит последним: «1,234.56» / «1.234,56».
+		// The decimal separator is the last one: "1,234.56" / "1.234,56".
 		if strings.LastIndex(s, ",") > strings.LastIndex(s, ".") {
 			s = strings.ReplaceAll(s, ".", "")
 			return strings.Replace(s, ",", ".", 1)
 		}
 		return strings.ReplaceAll(s, ",", "")
 	case commas+dots > 1:
-		// «1.234.567» — только разделители тысяч; группы должны быть по 3 цифры.
+		// "1.234.567" has only thousands separators; groups must be 3 digits.
 		groups := strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == '.' })
 		if len(groups) != commas+dots+1 || len(groups[0]) > 3 {
 			return "invalid"
@@ -168,7 +168,7 @@ func normalizeSeparators(s string) string {
 		return strings.Join(groups, "")
 	case commas+dots == 1:
 		i := strings.IndexAny(s, ".,")
-		if len(s)-i-1 == 3 && s[:i] != "0" && s[:i] != "" && len(s[:i]) <= 3 { // «1,500» — тысячи
+		if len(s)-i-1 == 3 && s[:i] != "0" && s[:i] != "" && len(s[:i]) <= 3 { // "1,500" is thousands
 			return s[:i] + s[i+1:]
 		}
 		return s[:i] + "." + s[i+1:]
@@ -185,11 +185,11 @@ func isDigits(s string) bool {
 	return s != ""
 }
 
-// Input — результат разбора быстрого ввода вроде «+500 usd зарплата».
+// Input is the result of parsing quick input such as "+500 usd salary".
 type Input struct {
-	Sign     int // +1 — явный «+», -1 — явный «-», 0 — без знака
+	Sign     int // +1 for explicit "+", -1 for explicit "-", 0 if unsigned
 	Amount   int64
-	Currency string // пусто, если валюта не указана
+	Currency string // empty if no currency was given
 	Note     string
 }
 
@@ -208,7 +208,7 @@ func ParseInput(s string) (Input, error) {
 	}
 	s = strings.TrimSpace(s)
 
-	// Символ валюты перед суммой: «$20».
+	// Currency symbol before the amount: "$20".
 	if r, size := utf8.DecodeRuneInString(s); r != utf8.RuneError && !unicode.IsDigit(r) {
 		code, ok := symbolRunes[r]
 		if !ok {
@@ -231,7 +231,7 @@ func ParseInput(s string) (Input, error) {
 	rest = strings.TrimLeft(rest, ".,")
 	rest = strings.TrimSpace(rest)
 
-	// Валюта после суммы: «20$», «20 usd», «20 руб.».
+	// Currency after the amount: "20$", "20 usd", "20 руб.".
 	if rest != "" && in.Currency == "" {
 		if r, size := utf8.DecodeRuneInString(rest); symbolRunes[r] != "" {
 			in.Currency, rest = symbolRunes[r], strings.TrimSpace(rest[size:])
@@ -254,7 +254,7 @@ func Format(amount int64, currency string) string {
 	return Number(amount) + nbsp + Symbol(currency)
 }
 
-// FormatSigned добавляет «+» к положительным суммам.
+// FormatSigned adds "+" to positive amounts.
 func FormatSigned(amount int64, currency string) string {
 	if amount > 0 {
 		return "+" + Format(amount, currency)
@@ -262,7 +262,7 @@ func FormatSigned(amount int64, currency string) string {
 	return Format(amount, currency)
 }
 
-// Number форматирует число с разделителями разрядов, без валюты.
+// Number formats a number with digit grouping, without a currency.
 func Number(amount int64) string {
 	sign := ""
 	if amount < 0 {
@@ -275,7 +275,7 @@ func Number(amount int64) string {
 	return sign + s
 }
 
-// Plain — формат для CSV: «-1234,56».
+// Plain is the CSV format: "-1234,56".
 func Plain(amount int64) string {
 	sign := ""
 	if amount < 0 {

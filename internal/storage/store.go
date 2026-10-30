@@ -1,9 +1,9 @@
-// Package storage хранит данные пользователей в SQLite.
+// Package storage keeps user data in SQLite.
 //
-// Все пользователи загружаются в память при открытии (бот личный, данных немного),
-// поэтому чтение не обращается к базе. Каждое изменение записывается в одной
-// SQL-транзакции: настройки, категории и счета перезаписываются целиком
-// (их единицы), а операции — только добавленные и удалённые.
+// All users are loaded into memory on open (the bot is personal and the data is small),
+// so reads never hit the database. Every change is written in a single SQL
+// transaction: settings, categories and accounts are rewritten in full (there are
+// only a few of them), while transactions are written as additions and deletions only.
 package storage
 
 import (
@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite" // драйвер SQLite на чистом Go, без CGO
+	_ "modernc.org/sqlite" // pure-Go SQLite driver, no CGO
 )
 
 const schema = `
@@ -60,11 +60,11 @@ CREATE TABLE IF NOT EXISTS transactions (
 CREATE INDEX IF NOT EXISTS transactions_by_time ON transactions (user_id, created_at);
 `
 
-// schemaVersion — текущая версия схемы (PRAGMA user_version). Будущие миграции
-// добавляются в migrate и применяются по номеру версии.
+// schemaVersion is the current schema version (PRAGMA user_version). Future migrations
+// are added to migrate and applied by version number.
 const schemaVersion = 1
 
-// timeLayout фиксированной ширины, чтобы строки сортировались так же, как время.
+// timeLayout is fixed-width so that strings sort the same way as the times.
 const timeLayout = "2006-01-02T15:04:05.000000000Z07:00"
 
 type Store struct {
@@ -82,14 +82,14 @@ func Open(path string) (*Store, error) {
 		return nil, fmt.Errorf("создание каталога данных: %w", err)
 	}
 	if dir != "." {
-		_ = os.Chmod(dir, 0o700) // MkdirAll не меняет права существующего каталога
+		_ = os.Chmod(dir, 0o700) // MkdirAll doesn't change permissions of an existing directory
 	}
 	dsn := "file:" + path + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("открытие базы: %w", err)
 	}
-	// Одно соединение: запись и так идёт последовательно, а pragma применяются к нему.
+	// A single connection: writes are sequential anyway, and pragmas apply per connection.
 	db.SetMaxOpenConns(1)
 	if err := migrate(db); err != nil {
 		db.Close()
@@ -134,16 +134,16 @@ func (s *Store) user(id int64) *User {
 	return u
 }
 
-// View даёт доступ к данным пользователя только для чтения.
-// Указатели из fn нельзя использовать после её завершения.
+// View gives read-only access to a user's data.
+// Pointers obtained in fn must not be used after it returns.
 func (s *Store) View(id int64, fn func(u *User)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fn(s.user(id))
 }
 
-// Update изменяет данные пользователя и сохраняет их. Если fn вернула ошибку или
-// запись в базу не удалась, состояние в памяти перечитывается из базы.
+// Update modifies a user's data and saves it. If fn returns an error or the
+// database write fails, the in-memory state is reloaded from the database.
 func (s *Store) Update(id int64, fn func(u *User) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -182,14 +182,14 @@ func (s *Store) inTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback() // no-op после Commit
+	defer tx.Rollback() // no-op after Commit
 	if err := fn(tx); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// persist записывает пользователя. before — ID операций, которые уже есть в базе.
+// persist writes the user. before holds the IDs of transactions already in the database.
 func persist(ctx context.Context, tx *sql.Tx, u *User, before map[int64]bool) error {
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO users (id, base_currency, default_account_id, next_id) VALUES (?, ?, ?, ?)
@@ -224,7 +224,7 @@ func persist(ctx context.Context, tx *sql.Tx, u *User, before map[int64]bool) er
 		}
 	}
 
-	// Операции не редактируются, поэтому достаточно вставить новые и удалить исчезнувшие.
+	// Transactions are never edited, so inserting new ones and deleting removed ones is enough.
 	insert, err := tx.PrepareContext(ctx, `
 		INSERT INTO transactions (user_id, id, type, account_id, amount, to_account_id, to_amount, category, note, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
@@ -253,7 +253,7 @@ func persist(ctx context.Context, tx *sql.Tx, u *User, before map[int64]bool) er
 	return nil
 }
 
-// loadUsers читает пользователей из базы; onlyID == 0 — всех.
+// loadUsers reads users from the database; onlyID == 0 means all of them.
 func loadUsers(ctx context.Context, db *sql.DB, onlyID int64) (map[int64]*User, error) {
 	users := map[int64]*User{}
 

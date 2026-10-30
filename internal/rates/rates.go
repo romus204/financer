@@ -1,4 +1,4 @@
-// Package rates — курсы валют для пересчёта итогов в основную валюту.
+// Package rates provides exchange rates for converting totals to the main currency.
 package rates
 
 import (
@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// DefaultURL — бесплатный источник без ключа; курсы относительно USD.
+// DefaultURL is a free source that needs no API key; rates are relative to USD.
 const DefaultURL = "https://open.er-api.com/v6/latest/USD"
 
 type Service struct {
@@ -24,12 +24,12 @@ type Service struct {
 
 	mu      sync.Mutex
 	perUSD  map[string]float64
-	updated time.Time // время обновления курсов у провайдера
+	updated time.Time // when the provider last updated the rates
 	fetched time.Time
 	tried   time.Time
 }
 
-// New создаёт сервис. Пустой url отключает загрузку курсов.
+// New creates the service. An empty url disables fetching rates.
 func New(url string) *Service {
 	return &Service{
 		url:    url,
@@ -39,7 +39,7 @@ func New(url string) *Service {
 	}
 }
 
-// Rate возвращает курс: сколько единиц to за одну единицу from.
+// Rate returns the rate: how many units of to per one unit of from.
 func (s *Service) Rate(ctx context.Context, from, to string) (float64, bool) {
 	if from == to {
 		return 1, true
@@ -55,7 +55,7 @@ func (s *Service) Rate(ctx context.Context, from, to string) (float64, bool) {
 	return t / f, true
 }
 
-// Convert пересчитывает сумму в сотых долях.
+// Convert converts an amount in hundredths.
 func (s *Service) Convert(ctx context.Context, amount int64, from, to string) (int64, bool) {
 	r, ok := s.Rate(ctx, from, to)
 	if !ok {
@@ -64,7 +64,7 @@ func (s *Service) Convert(ctx context.Context, amount int64, from, to string) (i
 	return int64(math.Round(float64(amount) * r)), true
 }
 
-// Updated — время актуальности курсов (нулевое, если курсов нет).
+// Updated returns when the rates were last current (zero if there are no rates).
 func (s *Service) Updated() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -75,7 +75,7 @@ func (s *Service) lookup(code string) (float64, bool) {
 	if v, ok := s.perUSD[code]; ok {
 		return v, true
 	}
-	// Стейблкоины считаем равными доллару.
+	// Stablecoins are treated as equal to the dollar.
 	if code == "USDT" || code == "USDC" || code == "USD" {
 		if s.perUSD != nil {
 			return 1, true

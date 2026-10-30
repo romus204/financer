@@ -40,7 +40,7 @@ type InlineKeyboard struct {
 	InlineKeyboard [][]InlineButton `json:"inline_keyboard"`
 }
 
-// Add добавляет ряд кнопок; пустые ряды пропускаются.
+// Add appends a row of buttons; empty rows are skipped.
 func (k *InlineKeyboard) Add(row ...InlineButton) *InlineKeyboard {
 	if len(row) > 0 {
 		k.InlineKeyboard = append(k.InlineKeyboard, row)
