@@ -309,7 +309,7 @@ func TestUpdatePersistsAcrossReopen(t *testing.T) {
 		b := u.AddAccount("Старый", KindCash, "RUB", t0)
 		archivedID = b.ID
 		u.AddTransaction(Transaction{Type: TxIncome, AccountID: a.ID, Amount: 12345, Category: "c", Note: "n"}, t0)
-		u.AddTransaction(Transaction{Type: TxTransfer, AccountID: a.ID, Amount: 100, ToAccountID: b.ID, ToAmount: 9000}, t0)
+		u.AddTransaction(Transaction{Type: TxTransfer, AccountID: a.ID, Amount: 100, ToAccountID: b.ID, ToAmount: 9000, MarketToAmount: 9100}, t0)
 		u.RemoveAccount(b.ID)
 		u.BaseCurrency = "EUR"
 		u.SetCategories(TxExpense, []string{"x", "y"})
@@ -347,7 +347,7 @@ func TestUpdatePersistsAcrossReopen(t *testing.T) {
 		if tx.Type != TxIncome || tx.Amount != 12345 || tx.Category != "c" || tx.Note != "n" || !tx.CreatedAt.Equal(t0) {
 			t.Errorf("tx = %+v", tx)
 		}
-		if tr := u.Transactions[1]; tr.ToAccountID != archivedID || tr.ToAmount != 9000 {
+		if tr := u.Transactions[1]; tr.ToAccountID != archivedID || tr.ToAmount != 9000 || tr.MarketToAmount != 9100 {
 			t.Errorf("transfer = %+v", tr)
 		}
 		if u.Balance(accID) != 12245 {

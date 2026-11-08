@@ -83,6 +83,7 @@ UPDATE accounts SET
 WHERE kind = 'credit' AND payment_amount > 0;
 UPDATE accounts SET payment_day = 0 WHERE kind = 'credit';
 `,
+	`ALTER TABLE transactions ADD COLUMN market_to_amount INTEGER NOT NULL DEFAULT 0;`,
 }
 
 // schemaVersion is the current schema version.
@@ -282,8 +283,8 @@ func persist(ctx context.Context, tx *sql.Tx, u *User, before map[int64]bool) er
 
 	// Transactions are never edited, so inserting new ones and deleting removed ones is enough.
 	insert, err := tx.PrepareContext(ctx, `
-		INSERT INTO transactions (user_id, id, type, account_id, amount, to_account_id, to_amount, category, note, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		INSERT INTO transactions (user_id, id, type, account_id, amount, to_account_id, to_amount, market_to_amount, category, note, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -295,7 +296,7 @@ func persist(ctx context.Context, tx *sql.Tx, u *User, before map[int64]bool) er
 			continue
 		}
 		if _, err := insert.ExecContext(ctx, u.ID, t.ID, string(t.Type), t.AccountID, t.Amount,
-			t.ToAccountID, t.ToAmount, t.Category, t.Note, t.CreatedAt.UTC().Format(timeLayout)); err != nil {
+			t.ToAccountID, t.ToAmount, t.MarketToAmount, t.Category, t.Note, t.CreatedAt.UTC().Format(timeLayout)); err != nil {
 			return err
 		}
 	}
@@ -378,14 +379,14 @@ func loadUsers(ctx context.Context, db *sql.DB, onlyID int64) (map[int64]*User, 
 	}
 
 	err = query(ctx, db, `
-		SELECT user_id, id, type, account_id, amount, to_account_id, to_amount, category, note, created_at
+		SELECT user_id, id, type, account_id, amount, to_account_id, to_amount, market_to_amount, category, note, created_at
 		FROM transactions WHERE (? = 0 OR user_id = ?) ORDER BY user_id, id`,
 		onlyID, func(rows *sql.Rows) error {
 			var uid int64
 			var created string
 			t := &Transaction{}
 			if err := rows.Scan(&uid, &t.ID, &t.Type, &t.AccountID, &t.Amount, &t.ToAccountID, &t.ToAmount,
-				&t.Category, &t.Note, &created); err != nil {
+				&t.MarketToAmount, &t.Category, &t.Note, &created); err != nil {
 				return err
 			}
 			var err error

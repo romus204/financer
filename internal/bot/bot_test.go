@@ -771,6 +771,54 @@ func TestTransferCrossCurrencyUsesRateButton(t *testing.T) {
 	}
 }
 
+func TestTransferRecordsExchangeLoss(t *testing.T) {
+	h, rub, usd := transferSetup(t, ratesServer(t))
+	startTransfer(h, rub, usd)
+	h.type_("9000")
+	h.type_("95")
+	txs := h.txs()
+	tx := txs[len(txs)-1]
+	if tx.MarketToAmount != 10000 || tx.ToAmount != 9500 {
+		t.Fatalf("tx = %+v", tx)
+	}
+	text := h.tg.last(t).text()
+	contains(t, text, "Рыночный курс: 1 $ = 90 ₽")
+	contains(t, text, "Потеря на обмене: <b>"+money.Format(500, "USD")+"</b> (5\u00a0%)")
+
+	h.type_(btnReport)
+	contains(t, h.tg.last(t).text(), "Потери на обмене: <b>"+money.Format(45000, "RUB")+"</b>")
+}
+
+func TestTransferWithoutRateHasNoExchangeLoss(t *testing.T) {
+	h, rub, usd := transferSetup(t, "")
+	startTransfer(h, rub, usd)
+	h.type_("9000")
+	h.type_("95")
+	txs := h.txs()
+	if tx := txs[len(txs)-1]; tx.MarketToAmount != 0 {
+		t.Fatalf("market amount stored without a rate: %+v", tx)
+	}
+	if strings.Contains(h.tg.last(t).text(), "на обмене") {
+		t.Errorf("loss shown without a rate: %s", h.tg.last(t).text())
+	}
+}
+
+func TestLossLine(t *testing.T) {
+	for _, c := range []struct {
+		loss  int64
+		share float64
+		want  string
+	}{
+		{500, 0.05, "📉 Потеря на обмене: <b>" + money.Format(500, "USD") + "</b> (5\u00a0%)"},
+		{-123, -0.0123, "📈 Выгода на обмене: <b>" + money.Format(123, "USD") + "</b> (1,2\u00a0%)"},
+		{0, 0, "✅ Обмен по рыночному курсу"},
+	} {
+		if got := lossLine(c.loss, "USD", c.share); got != c.want {
+			t.Errorf("lossLine(%d) = %q, want %q", c.loss, got, c.want)
+		}
+	}
+}
+
 func TestTransferUndo(t *testing.T) {
 	h, rub, usd := transferSetup(t, "")
 	startTransfer(h, rub, usd)

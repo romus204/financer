@@ -319,6 +319,10 @@ func describeTx(u *storage.User, t *storage.Transaction) string {
 			if t.Amount > 0 && t.ToAmount > 0 {
 				fmt.Fprintf(&sb, "\nКурс: %s", exchangeRate(t.Amount, cur, t.ToAmount, toCur))
 			}
+			if loss, ok := t.ExchangeLoss(); ok && t.Amount > 0 {
+				fmt.Fprintf(&sb, "\nРыночный курс: %s", exchangeRate(t.Amount, cur, t.MarketToAmount, toCur))
+				sb.WriteString("\n" + lossLine(loss, toCur, float64(loss)/float64(t.MarketToAmount)))
+			}
 		}
 	case storage.TxAdjust:
 		fmt.Fprintf(&sb, "🎯 <b>Корректировка: %s</b>\n%s", money.FormatSigned(t.Amount, cur), from)
@@ -342,6 +346,25 @@ func exchangeRate(a int64, aCur string, b int64, bCur string) string {
 	s := strconv.FormatFloat(x, 'f', prec, 64)
 	s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
 	return fmt.Sprintf("1 %s = %s %s", money.Symbol(bCur), strings.Replace(s, ".", ",", 1), money.Symbol(aCur))
+}
+
+// lossLine describes the difference from the market rate: «📉 Потеря на обмене: 5 $ (1,2 %)».
+func lossLine(loss int64, cur string, share float64) string {
+	switch {
+	case loss > 0:
+		return fmt.Sprintf("📉 Потеря на обмене: <b>%s</b> (%s)", money.Format(loss, cur), percent(share))
+	case loss < 0:
+		return fmt.Sprintf("📈 Выгода на обмене: <b>%s</b> (%s)", money.Format(-loss, cur), percent(-share))
+	default:
+		return "✅ Обмен по рыночному курсу"
+	}
+}
+
+// percent formats a share with one decimal: 0.0123 → «1,2 %».
+func percent(share float64) string {
+	s := strconv.FormatFloat(share*100, 'f', 1, 64)
+	s = strings.TrimSuffix(s, ".0")
+	return strings.Replace(s, ".", ",", 1) + "\u00a0%"
 }
 
 func catLabel(c string) string {

@@ -21,7 +21,7 @@ type draft struct {
 	toAccountID int64
 	amount      int64
 	toAmount    int64
-	estimate    int64 // credited amount at the current rate, shown on the button
+	estimate    int64 // credited amount at the current rate, shown on the button and kept as the market amount
 	note        string
 	msgID       int // message holding this draft's buttons
 }
@@ -422,6 +422,7 @@ func (b *Bot) transferCurrencies(uid int64, d *draft) (from, to string, ok bool)
 
 func (b *Bot) afterTransferAmount(r *req, s *session) {
 	d := s.draft
+	d.estimate = 0 // a stale estimate from an abandoned cross-currency pick must not be saved
 	from, to, ok := b.transferCurrencies(r.uid, d)
 	if !ok {
 		s.reset()
@@ -439,7 +440,6 @@ func (b *Bot) afterTransferAmount(r *req, s *session) {
 	text := fmt.Sprintf("🔁 Списано: <b>%s</b>\n\nСколько поступило на %s в %s?",
 		money.Format(d.amount, from), toLabel, currencyLabel(to))
 	k := kb()
-	d.estimate = 0
 	if est, ok := b.rates.Convert(r.ctx, d.amount, from, to); ok && est > 0 {
 		d.estimate = est
 		text += "\n<i>По текущему курсу ≈ " + money.Format(est, to) + "</i>"
@@ -474,7 +474,7 @@ func (b *Bot) saveTransfer(r *req, s *session) {
 		}
 		t := u.AddTransaction(storage.Transaction{
 			Type: storage.TxTransfer, AccountID: d.accountID, Amount: d.amount,
-			ToAccountID: d.toAccountID, ToAmount: d.toAmount, Note: d.note,
+			ToAccountID: d.toAccountID, ToAmount: d.toAmount, MarketToAmount: d.estimate, Note: d.note,
 		}, time.Now())
 		txID = t.ID
 		text = "✅ " + describeTx(u, t) + "\n\nОстатки:\n" + balancesOf(u, d.accountID, d.toAccountID)

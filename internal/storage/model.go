@@ -73,16 +73,19 @@ func (a *Account) NextPayment(now time.Time) (time.Time, bool) {
 
 // Transaction is a single operation. Amounts are in hundredths of the account's currency.
 // For a transfer, Amount is debited from AccountID and ToAmount is credited to ToAccountID.
+// MarketToAmount is what would have been credited at the market rate at the time of a
+// cross-currency transfer; 0 if the rate was unknown.
 type Transaction struct {
-	ID          int64     `json:"id"`
-	Type        TxType    `json:"type"`
-	AccountID   int64     `json:"account_id"`
-	Amount      int64     `json:"amount"`
-	ToAccountID int64     `json:"to_account_id,omitempty"`
-	ToAmount    int64     `json:"to_amount,omitempty"`
-	Category    string    `json:"category,omitempty"`
-	Note        string    `json:"note,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID             int64     `json:"id"`
+	Type           TxType    `json:"type"`
+	AccountID      int64     `json:"account_id"`
+	Amount         int64     `json:"amount"`
+	ToAccountID    int64     `json:"to_account_id,omitempty"`
+	ToAmount       int64     `json:"to_amount,omitempty"`
+	MarketToAmount int64     `json:"market_to_amount,omitempty"`
+	Category       string    `json:"category,omitempty"`
+	Note           string    `json:"note,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // User holds all data of a single user. Balances are not stored but computed from
@@ -244,6 +247,15 @@ func (u *User) Balances() map[int64]int64 {
 		}
 	}
 	return b
+}
+
+// ExchangeLoss returns how much less was credited than at the market rate, in the
+// currency of ToAccountID; negative means the rate was better than the market.
+func (t *Transaction) ExchangeLoss() (int64, bool) {
+	if t.Type != TxTransfer || t.MarketToAmount <= 0 {
+		return 0, false
+	}
+	return t.MarketToAmount - t.ToAmount, true
 }
 
 func (u *User) Balance(accID int64) int64 { return u.Balances()[accID] }

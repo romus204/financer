@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -327,10 +328,19 @@ func (b *Bot) showReport(r *req, month time.Time) {
 
 	var items []reportItem
 	var base string
+	losses := map[string]int64{} // exchange losses by the credited currency
 	b.store.View(r.uid, func(u *storage.User) {
 		base = u.BaseCurrency
 		for _, t := range u.Transactions {
-			if (t.Type != storage.TxExpense && t.Type != storage.TxIncome) || t.CreatedAt.Before(start) || !t.CreatedAt.Before(end) {
+			if t.CreatedAt.Before(start) || !t.CreatedAt.Before(end) {
+				continue
+			}
+			if loss, ok := t.ExchangeLoss(); ok {
+				if _, cur := accRef(u, t.ToAccountID); cur != "" {
+					losses[cur] += loss
+				}
+			}
+			if t.Type != storage.TxExpense && t.Type != storage.TxIncome {
 				continue
 			}
 			_, cur := accRef(u, t.AccountID)
@@ -357,12 +367,19 @@ func (b *Bot) showReport(r *req, month time.Time) {
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "📊 <b>%s %d</b>\n", monthNames[start.Month()-1], start.Year())
-	if len(items) == 0 {
+	if len(items) == 0 && len(losses) == 0 {
 		sb.WriteString("\nЗа этот месяц операций нет.")
 	} else {
 		fmt.Fprintf(&sb, "\n➕ Доходы: <b>%s</b>", money.Format(totals[storage.TxIncome], base))
 		fmt.Fprintf(&sb, "\n➖ Расходы: <b>%s</b>", money.Format(totals[storage.TxExpense], base))
 		fmt.Fprintf(&sb, "\n💰 Итог: <b>%s</b>\n", money.FormatSigned(totals[storage.TxIncome]-totals[storage.TxExpense], base))
+
+		if len(losses) > 0 {
+			sb.WriteString("\n" + b.lossSummary(r.ctx, losses, base) + "\n")
+			for c := range losses {
+				multiCurrency = multiCurrency || c != base
+			}
+		}
 
 		writeCategories(&sb, "Расходы по категориям", byCat[storage.TxExpense], totals[storage.TxExpense], base)
 		writeCategories(&sb, "Доходы по категориям", byCat[storage.TxIncome], totals[storage.TxIncome], base)
@@ -393,6 +410,35 @@ func (b *Bot) showReport(r *req, month time.Time) {
 		nav = append(nav, btn(monthNames[next.Month()-1]+" ▶", "r:"+next.Format("2006-01")))
 	}
 	b.show(r, strings.TrimRight(sb.String(), "\n"), kb(nav))
+}
+
+// lossSummary totals exchange losses in base; amounts without a rate are listed separately.
+func (b *Bot) lossSummary(ctx context.Context, losses map[string]int64, base string) string {
+	var sum int64
+	var converted bool
+	var missing []string
+	for _, c := range slices.Sorted(maps.Keys(losses)) {
+		v := losses[c]
+		if conv, ok := b.rates.Convert(ctx, v, c, base); ok {
+			sum += conv
+			converted = true
+		} else {
+			missing = append(missing, money.Format(v, c))
+		}
+	}
+	var lines []string
+	switch {
+	case sum > 0:
+		lines = append(lines, "💱 Потери на обмене: <b>"+money.Format(sum, base)+"</b>")
+	case sum < 0:
+		lines = append(lines, "💱 Выгода на обмене: <b>"+money.Format(-sum, base)+"</b>")
+	case converted:
+		lines = append(lines, "💱 Обмен по рыночному курсу")
+	}
+	if len(missing) > 0 {
+		lines = append(lines, "<i>Потери на обмене не пересчитаны (нет курса): "+strings.Join(missing, ", ")+"</i>")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func writeCategories(sb *strings.Builder, title string, byCat map[string]int64, total int64, base string) {
