@@ -229,8 +229,11 @@ func (b *Bot) showHistory(r *req, offset int, accID int64) {
 	loc := b.cfg.Location
 	now := time.Now().In(loc)
 	var sb strings.Builder
+	var base string
+	var days []historyDay
 	k := kb()
 	b.store.View(r.uid, func(u *storage.User) {
+		base = u.BaseCurrency
 		var list []*storage.Transaction
 		for i := len(u.Transactions) - 1; i >= 0; i-- {
 			t := u.Transactions[i]
@@ -253,18 +256,20 @@ func (b *Bot) showHistory(r *req, offset int, accID int64) {
 		}
 		end := min(offset+historyPage, len(list))
 
+		// Counted over the whole list: a day can span several pages.
+		totals := dayTotals(u, list, loc, now)
 		lastDay := ""
 		var nums []tg.InlineButton
 		for i, t := range list[offset:end] {
 			if day := dayTitle(t.CreatedAt.In(loc), now); day != lastDay {
-				sb.WriteString("\n<b>" + day + "</b>\n")
+				days = append(days, historyDay{title: day, total: totals[day]})
 				lastDay = day
 			}
 			n := offset + i + 1
-			fmt.Fprintf(&sb, "%d. %s\n", n, txLine(u, t, loc))
+			d := &days[len(days)-1]
+			d.lines = append(d.lines, fmt.Sprintf("%d. %s", n, txLine(u, t, loc)))
 			nums = append(nums, btn(strconv.Itoa(n), fmt.Sprintf("tx:%d:%d:%d", t.ID, offset, accID)))
 		}
-		sb.WriteString("\n<i>Нажмите номер, чтобы открыть или удалить операцию.</i>")
 		for _, rw := range grid(nums, 5) {
 			k.Add(rw...)
 		}
@@ -277,10 +282,119 @@ func (b *Bot) showHistory(r *req, offset int, accID int64) {
 		}
 		k.Add(nav...)
 	})
+
+	// Rendered outside View: a conversion may fetch the rates over the network.
+	converted := false
+	for _, d := range days {
+		sb.WriteString("\n<b>" + d.title + "</b>\n")
+		if line := d.total.line(base); line != "" {
+			sb.WriteString(line + "\n")
+		}
+		if line, foreign := b.netLine(r.ctx, d.total, base); line != "" {
+			sb.WriteString(line + "\n")
+			converted = converted || foreign
+		}
+		sb.WriteString(strings.Join(d.lines, "\n") + "\n")
+	}
+	if len(days) > 0 {
+		if converted {
+			fmt.Fprintf(&sb, "\n<i>Суммы в других валютах пересчитаны в %s по текущему курсу.</i>", base)
+		}
+		sb.WriteString("\n<i>Нажмите номер, чтобы открыть или удалить операцию.</i>")
+	}
 	if accID != 0 {
 		k.Add(btn("« К счёту", "a:v:"+strconv.FormatInt(accID, 10)))
 	}
 	b.show(r, sb.String(), k)
+}
+
+// historyDay is one day on a history page.
+type historyDay struct {
+	title string
+	total dayTotal
+	lines []string
+}
+
+// netLine formats income minus expenses in base; foreign reports whether another currency
+// was converted. Empty if it would only repeat the single amount of the day or no rate is known.
+func (b *Bot) netLine(ctx context.Context, d dayTotal, base string) (line string, foreign bool) {
+	expCurs, incCurs := sortCurrencies(d.expense, base), sortCurrencies(d.income, base)
+	curs := append(slices.Clone(expCurs), incCurs...)
+	if len(curs) == 0 || (len(curs) == 1 && curs[0] == base) {
+		return "", false
+	}
+	expense, expMissing, expOK := b.sumIn(ctx, d.expense, expCurs, base)
+	income, incMissing, incOK := b.sumIn(ctx, d.income, incCurs, base)
+	if !expOK && !incOK {
+		return "", false
+	}
+	missing := append(expMissing, incMissing...)
+	nonBase := len(curs)
+	for _, c := range curs {
+		if c == base {
+			nonBase--
+		}
+	}
+	foreign = nonBase > len(missing) // the base currency always converts
+	approx := ""
+	if foreign {
+		approx = "≈ "
+	}
+	line = "<i>Итог в основной валюте: " + approx + money.FormatSigned(income-expense, base)
+	if len(missing) > 0 {
+		line += " (без учёта: " + strings.Join(missing, ", ") + ")"
+	}
+	return line + "</i>", foreign
+}
+
+// dayTotal holds a day's expenses and income per currency.
+type dayTotal struct {
+	expense, income map[string]int64
+}
+
+// dayTotals sums transactions by day title; transfers and adjustments are not counted.
+func dayTotals(u *storage.User, list []*storage.Transaction, loc *time.Location, now time.Time) map[string]dayTotal {
+	res := map[string]dayTotal{}
+	for _, t := range list {
+		if t.Type != storage.TxExpense && t.Type != storage.TxIncome {
+			continue
+		}
+		day := dayTitle(t.CreatedAt.In(loc), now)
+		d, ok := res[day]
+		if !ok {
+			d = dayTotal{map[string]int64{}, map[string]int64{}}
+			res[day] = d
+		}
+		_, cur := accRef(u, t.AccountID)
+		if t.Type == storage.TxExpense {
+			d.expense[cur] += t.Amount
+		} else {
+			d.income[cur] += t.Amount
+		}
+	}
+	return res
+}
+
+// line formats the total for the history view; empty if the day has no expenses or income.
+func (d dayTotal) line(base string) string {
+	format := func(sign string, totals map[string]int64) string {
+		var parts []string
+		for _, c := range sortCurrencies(totals, base) {
+			parts = append(parts, money.Format(totals[c], c))
+		}
+		return sign + " " + strings.Join(parts, ", ")
+	}
+	var parts []string
+	if len(d.expense) > 0 {
+		parts = append(parts, format("➖", d.expense))
+	}
+	if len(d.income) > 0 {
+		parts = append(parts, format("➕", d.income))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "<i>Итого: " + strings.Join(parts, " · ") + "</i>"
 }
 
 func (b *Bot) showTx(r *req, id int64, offset int, accID int64) {

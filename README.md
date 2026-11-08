@@ -19,7 +19,7 @@ Written in Go; the only external dependency is the SQLite driver [`modernc.org/s
   After the input the bot shows category buttons; on the same screen you can switch the account and add a note.
 - **Transfers** between your own accounts: cash withdrawals, card top-ups, currency exchange. If the currencies differ, the bot asks how much was received and suggests the amount at the current rate.
 - **Balance**: per-account balances, totals per currency and a grand total in the main currency at the current rate.
-- **History** with pagination, overall or per account; any transaction can be opened and deleted.
+- **History** with pagination and daily totals, overall or per account; any transaction can be opened and deleted.
 - **Monthly report**: income, expenses and a per-category breakdown with percentages.
 - **Balance adjustment**: enter the actual balance and the difference is recorded as a separate transaction.
 - **↩️ Undo** right after every entry.

@@ -941,6 +941,101 @@ func TestHistoryPagination(t *testing.T) {
 	contains(t, h.tg.last(t).text(), "21. ")
 }
 
+func TestHistoryDayTotals(t *testing.T) {
+	h := newHarness(t, "")
+	rub := h.addAccount("Card", storage.KindBank, "RUB", 0)
+	usd := h.addAccount("Cash", storage.KindCash, "USD", 0)
+	at := func(day int) time.Time { return time.Date(2024, time.March, day, 12, 0, 0, 0, time.UTC) }
+	transfer := storage.Transaction{Type: storage.TxTransfer, AccountID: rub, Amount: 9000, ToAccountID: usd, ToAmount: 100}
+	err := h.b.store.Update(testUser, func(u *storage.User) error {
+		u.AddTransaction(transfer, at(14))
+		u.AddTransaction(storage.Transaction{Type: storage.TxExpense, AccountID: rub, Amount: 100000}, at(15))
+		u.AddTransaction(storage.Transaction{Type: storage.TxExpense, AccountID: rub, Amount: 50000}, at(15))
+		u.AddTransaction(storage.Transaction{Type: storage.TxExpense, AccountID: usd, Amount: 2000}, at(15))
+		u.AddTransaction(storage.Transaction{Type: storage.TxIncome, AccountID: rub, Amount: 300000}, at(15))
+		u.AddTransaction(transfer, at(15))
+		for range 12 {
+			u.AddTransaction(storage.Transaction{Type: storage.TxExpense, AccountID: rub, Amount: 100}, at(16))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// the day spans two pages, each shows the total of the whole day
+	day16 := "<b>16 марта 2024</b>\n<i>Итого: ➖ " + money.Format(1200, "RUB") + "</i>\n"
+	h.type_(btnHistory)
+	id := h.tg.lastSentID()
+	contains(t, h.tg.last(t).text(), day16)
+
+	h.press(id, "h:10:0")
+	p2 := h.tg.last(t).text()
+	contains(t, p2, day16)
+	contains(t, p2, "<b>15 марта 2024</b>\n<i>Итого: ➖ "+money.Format(150000, "RUB")+", "+money.Format(2000, "USD")+" · ➕ "+money.Format(300000, "RUB")+"</i>\n")
+	if strings.Contains(p2, "14 марта 2024</b>\n<i>Итого") {
+		t.Errorf("transfers must not make a total: %s", p2)
+	}
+
+	// the account view totals only that account
+	h.press(id, "h:0:"+strconv.FormatInt(usd, 10))
+	contains(t, h.tg.last(t).text(), "<b>15 марта 2024</b>\n<i>Итого: ➖ "+money.Format(2000, "USD")+"</i>\n")
+}
+
+func TestHistoryDayNetInBaseCurrency(t *testing.T) {
+	setup := func(t *testing.T, ratesURL string) *harness {
+		h := newHarness(t, ratesURL)
+		rub := h.addAccount("Card", storage.KindBank, "RUB", 0)
+		usd := h.addAccount("Cash", storage.KindCash, "USD", 0)
+		at := func(day int) time.Time { return time.Date(2024, time.March, day, 12, 0, 0, 0, time.UTC) }
+		err := h.b.store.Update(testUser, func(u *storage.User) error {
+			// mixed currencies
+			u.AddTransaction(storage.Transaction{Type: storage.TxExpense, AccountID: rub, Amount: 100000}, at(14))
+			u.AddTransaction(storage.Transaction{Type: storage.TxExpense, AccountID: usd, Amount: 1000}, at(14)) // 10 USD = 900 RUB
+			u.AddTransaction(storage.Transaction{Type: storage.TxIncome, AccountID: rub, Amount: 300000}, at(14))
+			// base currency, expense and income
+			u.AddTransaction(storage.Transaction{Type: storage.TxExpense, AccountID: rub, Amount: 40000}, at(15))
+			u.AddTransaction(storage.Transaction{Type: storage.TxIncome, AccountID: rub, Amount: 10000}, at(15))
+			// a single amount in the base currency
+			u.AddTransaction(storage.Transaction{Type: storage.TxExpense, AccountID: rub, Amount: 5000}, at(16))
+			// foreign currency only
+			u.AddTransaction(storage.Transaction{Type: storage.TxExpense, AccountID: usd, Amount: 2000}, at(17))
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+	const label = "<i>Итог в основной валюте: "
+	const footer = "по текущему курсу"
+
+	t.Run("with rates", func(t *testing.T) {
+		h := setup(t, ratesServer(t))
+		h.type_(btnHistory)
+		text := h.tg.last(t).text()
+		perCurrency := "<i>Итого: ➖ " + money.Format(100000, "RUB") + ", " + money.Format(1000, "USD") + " · ➕ " + money.Format(300000, "RUB") + "</i>\n"
+		contains(t, text, "<b>14 марта 2024</b>\n"+perCurrency+label+"≈ "+money.FormatSigned(110000, "RUB")+"</i>\n")
+		contains(t, text, "<b>15 марта 2024</b>\n<i>Итого: ➖ "+money.Format(40000, "RUB")+" · ➕ "+money.Format(10000, "RUB")+"</i>\n"+label+money.FormatSigned(-30000, "RUB")+"</i>\n")
+		contains(t, text, "<b>16 марта 2024</b>\n<i>Итого: ➖ "+money.Format(5000, "RUB")+"</i>\n2. ")
+		contains(t, text, "<b>17 марта 2024</b>\n<i>Итого: ➖ "+money.Format(2000, "USD")+"</i>\n"+label+"≈ "+money.FormatSigned(-180000, "RUB")+"</i>\n")
+		contains(t, text, footer)
+	})
+
+	t.Run("without rates", func(t *testing.T) {
+		h := setup(t, "")
+		h.type_(btnHistory)
+		text := h.tg.last(t).text()
+		// the rouble part is still totalled, the dollars are named as left out
+		contains(t, text, label+money.FormatSigned(200000, "RUB")+" (без учёта: "+money.Format(1000, "USD")+")</i>\n")
+		// nothing to convert: only the per-currency line remains
+		contains(t, text, "<b>17 марта 2024</b>\n<i>Итого: ➖ "+money.Format(2000, "USD")+"</i>\n1. ")
+		if strings.Contains(text, footer) {
+			t.Errorf("nothing was converted, footer must be absent: %s", text)
+		}
+	})
+}
+
 func TestHistoryEmpty(t *testing.T) {
 	h := newHarness(t, "")
 	h.type_(btnHistory)
